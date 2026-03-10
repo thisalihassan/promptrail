@@ -13,6 +13,7 @@ export function activate(context: vscode.ExtensionContext): void {
   if (!workspaceFolder) return;
 
   const workspaceRoot = workspaceFolder.uri.fsPath;
+  ensureGitExclude(workspaceRoot);
   tracker = new Tracker(workspaceRoot);
 
   const timelineProvider = new TimelineProvider(
@@ -180,6 +181,22 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {
   tracker?.dispose();
+}
+
+function ensureGitExclude(workspaceRoot: string): void {
+  try {
+    const excludePath = path.join(workspaceRoot, ".git", "info", "exclude");
+    if (!fs.existsSync(path.dirname(excludePath))) return;
+
+    const content = fs.existsSync(excludePath)
+      ? fs.readFileSync(excludePath, "utf-8")
+      : "";
+
+    if (content.includes(".promptrail")) return;
+
+    const line = "\n.promptrail/\n";
+    fs.writeFileSync(excludePath, content.trimEnd() + line, "utf-8");
+  } catch {}
 }
 
 function truncate(str: string, len: number): string {
