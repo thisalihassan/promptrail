@@ -11,5 +11,8 @@ demo/
 node_modules/
 CLAUDE.md
 CONTRIBUTING.md
+PUBLISHING.md
+ROADMAP.md
+.npmignore
 conversation-*.md
 *.vsix

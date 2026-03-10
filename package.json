@@ -104,9 +104,13 @@
     "lint": "tsc --noEmit",
     "test": "node esbuild.mjs test && cp -r tests/fixtures dist-tests/fixtures 2>/dev/null; node --test dist-tests/index.js",
     "package": "npx @vscode/vsce package",
-    "release": "npm run build && npx @vscode/vsce publish patch",
-    "release:minor": "npm run build && npx @vscode/vsce publish minor",
-    "release:major": "npm run build && npx @vscode/vsce publish major"
+    "publish:vsce": "npx @vscode/vsce publish",
+    "publish:ovsx": "npx ovsx publish *.vsix -p $OVSX_TOKEN",
+    "publish:npm": "npm publish",
+    "publish:all": "npm run publish:vsce && npm run publish:ovsx && npm run publish:npm",
+    "release": "npm run build && npx @vscode/vsce publish patch && npm run publish:ovsx && npm run publish:npm",
+    "release:minor": "npm run build && npx @vscode/vsce publish minor && npm run publish:ovsx && npm run publish:npm",
+    "release:major": "npm run build && npx @vscode/vsce publish major && npm run publish:ovsx && npm run publish:npm"
   },
   "devDependencies": {
     "@types/node": "^25.4.0",
