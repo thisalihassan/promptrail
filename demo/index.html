@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Promptrail — Interactive Demo</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --surface: #252526;
+    --border: #3c3c3c;
+    --text: #cccccc;
+    --text-dim: #888888;
+    --blue: #4fc1ff;
+    --green: #4ec9b0;
+    --orange: #ce9178;
+    --red: #f14c4c;
+    --yellow: #cca700;
+    --btn-bg: #3c3c3c;
+    --btn-text: #cccccc;
+    --btn-hover: #4c4c4c;
+    --primary-bg: #0e639c;
+    --primary-text: #ffffff;
+    --focus: #007fd4;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #111111;
+    color: var(--text);
+    display: flex;
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    width: 380px;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .sidebar-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .sidebar-header h2 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex: 1;
+  }
+
+  .count-badge {
+    font-size: 10px;
+    background: var(--primary-bg);
+    color: var(--primary-text);
+    padding: 0 5px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+
+  .toolbar {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .search-input {
+    width: 100%;
+    padding: 4px 8px;
+    font-size: 12px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-family: inherit;
+    outline: none;
+  }
+
+  .search-input:focus { border-color: var(--focus); }
+  .search-input::placeholder { color: var(--text-dim); }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .filter-row input { cursor: pointer; }
+
+  .sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+
+  .source-group { margin-bottom: 2px; }
+
+  .source-header {
+    padding: 6px 14px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-dim);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .source-header:hover { color: var(--text); }
+
+  .chevron {
+    display: inline-block;
+    width: 14px;
+    text-align: center;
+    font-size: 10px;
+    transition: transform 0.15s;
+  }
+
+  .source-group.collapsed .chevron { transform: rotate(-90deg); }
+  .source-group.collapsed .source-tasks { display: none; }
+
+  .source-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .source-dot.cursor { background: var(--blue); }
+  .source-dot.claude { background: var(--orange); }
+
+  .group-count {
+    font-size: 9px;
+    background: var(--surface);
+    padding: 0 4px;
+    border-radius: 6px;
+    margin-left: auto;
+  }
+
+  .task-item {
+    padding: 8px 14px 8px 24px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: background 0.1s;
+    position: relative;
+  }
+
+  .task-item:hover { background: rgba(255,255,255,0.04); }
+
+  .task-item::before {
+    content: '';
+    position: absolute;
+    left: 9px;
+    top: 15px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+  }
+
+  .task-item.has-files::before { background: var(--green); }
+  .task-item.active::before {
+    background: var(--blue);
+    box-shadow: 0 0 4px var(--blue);
+  }
+
+  .task-prompt {
+    font-size: 12px;
+    line-height: 1.4;
+    font-weight: 500;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  .task-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .file-count.has-files {
+    color: var(--green);
+    font-weight: 600;
+  }
+
+  .task-expanded {
+    display: none;
+    padding: 6px 0 2px;
+  }
+
+  .task-item.expanded .task-expanded { display: block; }
+  .task-item.expanded .task-prompt { -webkit-line-clamp: unset; }
+
+  .file-list {
+    list-style: none;
+    margin: 4px 0;
+  }
+
+  .file-list li {
+    font-size: 11px;
+    padding: 2px 0;
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .file-list li::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    border-radius: 1px;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+
+  .task-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .action-btn {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--btn-bg);
+    background: var(--btn-bg);
+    color: var(--btn-text);
+    cursor: pointer;
+    transition: background 0.1s;
+    font-family: inherit;
+  }
+
+  .action-btn:hover { background: var(--btn-hover); }
+  .action-btn.danger { color: var(--red); }
+
+  /* Main content */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .hero {
+    padding: 60px 40px 40px;
+    text-align: center;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .hero h1 {
+    font-size: 36px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: #ffffff;
+  }
+
+  .hero h1 span { color: var(--blue); }
+
+  .hero .subtitle {
+    font-size: 16px;
+    color: var(--text-dim);
+    max-width: 560px;
+    margin: 0 auto 20px;
+    line-height: 1.6;
+  }
+
+  .hero .tagline {
+    font-size: 14px;
+    color: var(--orange);
+    font-style: italic;
+  }
+
+  .features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    padding: 32px 40px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .feature-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+
+  .feature-card h4 {
+    font-size: 13px;
+    margin-bottom: 6px;
+    color: #ffffff;
+  }
+
+  .feature-card p {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  .feature-icon {
+    font-size: 20px;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .how-section {
+    padding: 32px 40px;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+
+  .how-section h3 {
+    font-size: 18px;
+    margin-bottom: 16px;
+    color: #ffffff;
+  }
+
+  .how-step {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 16px;
+    align-items: flex-start;
+  }
+
+  .step-num {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--primary-bg);
+    color: var(--primary-text);
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .step-text {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    padding-top: 3px;
+  }
+
+  .step-text strong { color: var(--text); }
+
+  .agent-table {
+    margin: 24px 40px;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .agent-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .agent-table th, .agent-table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .agent-table th {
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+  }
+
+  .agent-table td { color: var(--text); }
+
+  .badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  .badge.full { background: rgba(78,201,176,0.2); color: var(--green); }
+  .badge.partial { background: rgba(204,167,0,0.2); color: var(--yellow); }
+  .badge.none { background: rgba(136,136,136,0.2); color: var(--text-dim); }
+
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--primary-bg);
+    color: var(--primary-text);
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  .toast.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h2>Task Timeline</h2>
+    <span class="count-badge" id="total-count">0</span>
+  </div>
+  <div class="toolbar">
+    <input class="search-input" type="text" placeholder="Search prompts or files..." oninput="onSearch(this.value)" />
+    <label class="filter-row">
+      <input type="checkbox" onchange="onFilesOnly(this.checked)" />
+      <span>Only show prompts with file changes</span>
+    </label>
+  </div>
+  <div class="sidebar-content" id="app"></div>
+</div>
+
+<div class="main">
+  <div class="hero">
+    <h1>Prompt<span>rail</span></h1>
+    <p class="subtitle">See what every AI prompt changed. Browse, diff, and rollback by intent.</p>
+    <div class="tagline">"Git tracks what changed. Promptrail tracks why the agent changed it."</div>
+  </div>
+
+  <div class="features">
+    <div class="feature-card">
+      <span class="feature-icon">&#128269;</span>
+      <h4>Trace</h4>
+      <p>See exactly which files changed for each prompt. Search by prompt text or file name.</p>
+    </div>
+    <div class="feature-card">
+      <span class="feature-icon">&#128260;</span>
+      <h4>Diff</h4>
+      <p>Full before/after diffs for each prompt. Not just what changed but the complete context.</p>
+    </div>
+    <div class="feature-card">
+      <span class="feature-icon">&#9198;</span>
+      <h4>Rollback</h4>
+      <p>Revert a specific prompt's changes without losing everything that came after it.</p>
+    </div>
+  </div>
+
+  <div class="how-section">
+    <h3>How it works</h3>
+    <div class="how-step">
+      <div class="step-num">1</div>
+      <div class="step-text"><strong>Install the extension</strong> and open any project in Cursor or VS Code.</div>
+    </div>
+    <div class="how-step">
+      <div class="step-num">2</div>
+      <div class="step-text"><strong>Use your AI agent normally.</strong> Promptrail reads sessions automatically. No buttons to click, nothing to configure.</div>
+    </div>
+    <div class="how-step">
+      <div class="step-num">3</div>
+      <div class="step-text"><strong>Open the sidebar</strong> to see every prompt, which files it changed, and click to view diffs or rollback.</div>
+    </div>
+  </div>
+
+  <div class="agent-table">
+    <table>
+      <tr>
+        <th>Feature</th>
+        <th>Cursor</th>
+        <th>Claude Code</th>
+      </tr>
+      <tr>
+        <td>Prompt timeline</td>
+        <td><span class="badge full">Full</span></td>
+        <td><span class="badge full">Full</span></td>
+      </tr>
+      <tr>
+        <td>Real timestamps</td>
+        <td><span class="badge full">SQLite</span></td>
+        <td><span class="badge full">JSONL</span></td>
+      </tr>
+      <tr>
+        <td>File attribution</td>
+        <td><span class="badge full">Watcher + SQLite</span></td>
+        <td><span class="badge full">JSONL tool_use</span></td>
+      </tr>
+      <tr>
+        <td>Before/after diffs</td>
+        <td><span class="badge full">File watcher</span></td>
+        <td><span class="badge partial">Edit hunks</span></td>
+      </tr>
+      <tr>
+        <td>Rollback</td>
+        <td><span class="badge full">File watcher</span></td>
+        <td><span class="badge none">Planned</span></td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const DEMO_TASKS = [
+  { id: 'cur-demo-0', prompt: 'Refactor auth middleware to use JWT instead of session cookies', source: 'cursor', createdAt: Date.now() - 7200000, filesChanged: ['src/middleware/auth.ts','src/routes/login.ts','src/routes/logout.ts','src/utils/token.ts'], status: 'completed' },
+  { id: 'cur-demo-1', prompt: 'Add rate limiting to all API endpoints', source: 'cursor', createdAt: Date.now() - 5400000, filesChanged: ['src/middleware/rate-limit.ts','src/app.ts','package.json'], status: 'completed' },
+  { id: 'cur-demo-2', prompt: 'Why is the login test failing?', source: 'cursor', createdAt: Date.now() - 4800000, filesChanged: [], status: 'completed' },
+  { id: 'cur-demo-3', prompt: 'Fix the login test and add coverage for token expiry', source: 'cursor', createdAt: Date.now() - 4200000, filesChanged: ['tests/utils/token.test.ts','tests/helpers/auth.ts','src/utils/token.ts'], status: 'completed' },
+  { id: 'cc-demo-0', prompt: 'Set up CI pipeline with GitHub Actions', source: 'claude', createdAt: Date.now() - 3600000, filesChanged: ['.github/workflows/ci.yml','package.json'], status: 'completed' },
+  { id: 'cc-demo-1', prompt: 'Add Docker support for local development', source: 'claude', createdAt: Date.now() - 1800000, filesChanged: ['Dockerfile','docker-compose.yml','.dockerignore','README.md'], status: 'completed' },
+  { id: 'cur-demo-4', prompt: 'Add caching layer to database queries using Redis', source: 'cursor', createdAt: Date.now() - 600000, filesChanged: ['src/db/cache.ts','src/db/queries.ts','src/config.ts'], status: 'completed' },
+  { id: 'cur-demo-5', prompt: 'What does the cache invalidation strategy look like?', source: 'cursor', createdAt: Date.now() - 120000, filesChanged: [], status: 'completed' },
+];
+
+let searchQuery = '';
+let filesOnly = false;
+let expandedTasks = new Set();
+let collapsedSources = new Set();
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), 2000);
+}
+
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm ago';
+  const hr = Math.floor(min / 60);
+  return hr + 'h ago';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+function onSearch(val) { searchQuery = val; render(); }
+function onFilesOnly(checked) { filesOnly = checked; render(); }
+
+function render() {
+  const app = document.getElementById('app');
+
+  let filtered = [...DEMO_TASKS];
+
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    filtered = filtered.filter(t =>
+      t.prompt.toLowerCase().includes(q) ||
+      t.filesChanged.some(f => f.toLowerCase().includes(q))
+    );
+  }
+
+  if (filesOnly) {
+    filtered = filtered.filter(t => t.filesChanged.length > 0);
+  }
+
+  document.getElementById('total-count').textContent = filtered.length;
+
+  const groups = {};
+  for (const t of filtered) {
+    const src = t.source || 'unknown';
+    if (!groups[src]) groups[src] = [];
+    groups[src].push(t);
+  }
+
+  const sourceOrder = ['cursor', 'claude'];
+  const sourceLabels = { cursor: 'Cursor', claude: 'Claude Code' };
+
+  let html = '';
+
+  for (const src of sourceOrder) {
+    const tasks = groups[src];
+    if (!tasks || tasks.length === 0) continue;
+
+    const isCollapsed = collapsedSources.has(src);
+
+    html += '<div class="source-group' + (isCollapsed ? ' collapsed' : '') + '">';
+    html += '<div class="source-header" onclick="toggleSource(\'' + src + '\')">';
+    html += '<span class="chevron">&#9660;</span>';
+    html += '<span class="source-dot ' + src + '"></span>';
+    html += '<span>' + sourceLabels[src] + '</span>';
+    html += '<span class="group-count">' + tasks.length + '</span>';
+    html += '</div>';
+
+    html += '<div class="source-tasks">';
+    for (const t of tasks) {
+      const isExpanded = expandedTasks.has(t.id);
+      const hasFiles = t.filesChanged.length > 0;
+      let cls = 'task-item';
+      if (isExpanded) cls += ' expanded';
+      if (hasFiles) cls += ' has-files';
+
+      html += '<div class="' + cls + '" onclick="toggle(\'' + t.id + '\')">';
+      html += '<div class="task-prompt">' + escapeHtml(t.prompt) + '</div>';
+      html += '<div class="task-meta">';
+      html += '<span>' + timeAgo(t.createdAt) + '</span>';
+      if (hasFiles) {
+        html += '<span class="file-count has-files">' + t.filesChanged.length + ' file' + (t.filesChanged.length === 1 ? '' : 's') + '</span>';
+      } else {
+        html += '<span class="file-count">no file changes</span>';
+      }
+      html += '</div>';
+
+      html += '<div class="task-expanded">';
+      if (hasFiles) {
+        html += '<ul class="file-list">';
+        for (const f of t.filesChanged) html += '<li>' + escapeHtml(f) + '</li>';
+        html += '</ul>';
+      }
+      html += '<div class="task-actions">';
+      if (hasFiles) {
+        html += '<button class="action-btn" onclick="event.stopPropagation(); viewDiff(\'' + t.id + '\')">View Diff</button>';
+        html += '<button class="action-btn danger" onclick="event.stopPropagation(); rollback(\'' + t.id + '\')">Rollback</button>';
+      }
+      html += '</div>';
+      html += '</div>';
+
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  app.innerHTML = html;
+}
+
+function toggle(id) {
+  expandedTasks.has(id) ? expandedTasks.delete(id) : expandedTasks.add(id);
+  render();
+}
+
+function toggleSource(src) {
+  collapsedSources.has(src) ? collapsedSources.delete(src) : collapsedSources.add(src);
+  render();
+}
+
+function viewDiff(id) {
+  const t = DEMO_TASKS.find(t => t.id === id);
+  showToast('Opening diff for ' + t.filesChanged.length + ' file(s)');
+}
+
+function rollback(id) {
+  const t = DEMO_TASKS.find(t => t.id === id);
+  showToast('Rolled back: "' + t.prompt.slice(0, 35) + '..."');
+}
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[promptrail] File changed: ${CLAUDE_TOOL_ARG_FILE_PATH:-${CLAUDE_TOOL_ARG_file_path:-unknown}}\" >> /tmp/promptrail-claude-changes.log 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

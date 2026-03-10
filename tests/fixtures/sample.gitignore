@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+dist/
+
+# Build artifacts
+*.vsix
+*.tgz
+
+# IDE
+.cursor/
+.vscode/
+
+# Secrets
+.env
+.env.local
+
+# Misc
+*.log

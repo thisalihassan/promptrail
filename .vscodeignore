@@ -1,0 +1,14 @@
+.gitignore
+src/
+tsconfig.json
+esbuild.mjs
+**/*.map
+.promptrail/
+.claude/
+.cursor/
+claude-plugin/
+demo/
+node_modules/
+CLAUDE.md
+conversation-*.md
+*.vsix

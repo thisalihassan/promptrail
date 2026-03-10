@@ -1,0 +1,9 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Refactor the database module to use connection pooling</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I'll refactor the database module to use a connection pool instead of individual connections."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Updated the database module with connection pooling."}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Add unit tests for the connection pool</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I'll create a test file for the connection pool."}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Why is the test failing?</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"The test is failing because the pool.connect() mock doesn't return a promise."}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<system_reminder>Plan mode is active.</system_reminder><user_query>ok</user_query>"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<open_and_recently_viewed_files>some file list</open_and_recently_viewed_files><user_query>Fix the mock</user_query>"}]}}

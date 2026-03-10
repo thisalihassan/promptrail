@@ -1,0 +1,107 @@
+{
+  "name": "promptrail",
+  "displayName": "Promptrail — Prompt-Level Version Control",
+  "description": "See what every AI prompt changed. Reads Claude Code and Cursor sessions automatically. Browse, diff, and rollback by intent.",
+  "version": "0.3.0",
+  "publisher": "promptrail",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "version control",
+    "prompt",
+    "rollback",
+    "cursor",
+    "copilot",
+    "claude",
+    "vibe coding"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "bin": {
+    "promptrail": "./dist/cli.js"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "promptrail",
+          "title": "Promptrail",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "promptrail": [
+        {
+          "type": "webview",
+          "id": "promptrail.timeline",
+          "name": "Task Timeline"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "promptrail.refresh",
+        "title": "Refresh Timeline",
+        "category": "Promptrail",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "promptrail.rollbackToTask",
+        "title": "Rollback to Task",
+        "category": "Promptrail",
+        "icon": "$(history)"
+      },
+      {
+        "command": "promptrail.viewTaskDiff",
+        "title": "View Task Diff",
+        "category": "Promptrail",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "promptrail.exportChat",
+        "title": "Export Chat to Markdown",
+        "category": "Promptrail",
+        "icon": "$(export)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "promptrail.refresh",
+          "when": "view == promptrail.timeline",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:ext": "node esbuild.mjs ext",
+    "build:cli": "node esbuild.mjs cli",
+    "watch": "node esbuild.mjs --watch",
+    "watch:ext": "node esbuild.mjs ext --watch",
+    "watch:cli": "node esbuild.mjs cli --watch",
+    "lint": "tsc --noEmit",
+    "test": "node esbuild.mjs test && cp -r tests/fixtures dist-tests/fixtures 2>/dev/null; node --test dist-tests/index.js",
+    "package": "npx @vscode/vsce package",
+    "release": "npm run build && npm run package && npm version patch --no-git-tag-version"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

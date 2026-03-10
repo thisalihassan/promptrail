@@ -1,0 +1,20 @@
+{
+  "name": "promptrail",
+  "version": "0.3.0",
+  "description": "Prompt-level version control for AI code editing. Browse, diff, and rollback AI agent changes by intent.",
+  "author": {
+    "name": "promptrail"
+  },
+  "repository": "https://github.com/promptrail/promptrail",
+  "license": "MIT",
+  "keywords": [
+    "version-control",
+    "ai",
+    "agent",
+    "diff",
+    "rollback",
+    "prompt",
+    "cursor",
+    "claude"
+  ]
+}

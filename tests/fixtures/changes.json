@@ -1,0 +1,8 @@
+[
+  {"relPath":"src/app.ts","before":"const app = \"hello\";\nexport default app;\n","after":"const app = \"hello world\";\nexport default app;\n","timestamp":1773100050000},
+  {"relPath":"src/app.ts","before":"const app = \"hello world\";\nexport default app;\n","after":"const app = \"hello world!\";\nexport default app;\n","timestamp":1773100060000},
+  {"relPath":"src/utils.ts","before":"export function add(a: number, b: number) {\n  return a + b;\n}\n","after":"export function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function subtract(a: number, b: number): number {\n  return a - b;\n}\n","timestamp":1773100150000},
+  {"relPath":"src/new-file.ts","before":"","after":"export const VERSION = '1.0.0';\n","timestamp":1773100160000},
+  {"relPath":"claude-plugin/hooks.json","before":"","after":"{\"hooks\":[]}","timestamp":1773100250000},
+  {"relPath":"src/deleted.ts","before":"// old code\n","after":"","timestamp":1773100350000}
+]
