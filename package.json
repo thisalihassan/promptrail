@@ -104,15 +104,9 @@
     "lint": "tsc --noEmit",
     "test": "node esbuild.mjs test && cp -r tests/fixtures dist-tests/fixtures 2>/dev/null; node --test dist-tests/index.js",
     "package": "npx @vscode/vsce package",
-    "publish:vsce": "source .env 2>/dev/null; npx @vscode/vsce publish -p $VSCE_PAT",
-    "publish:ovsx": "source .env 2>/dev/null; npx ovsx publish *.vsix -p $OVSX_TOKEN",
-    "publish:npm": "npm publish",
-    "publish:all": "npm run publish:vsce && npm run publish:ovsx && npm run publish:npm",
-    "prerelease": "npm run build && npm run test",
-    "release:patch": "npm version patch --no-git-tag-version && npm run build && npm run package && npm run publish:npm",
-    "release:minor": "npm version minor --no-git-tag-version && npm run build && npm run package && npm run publish:npm",
-    "release:major": "npm version major --no-git-tag-version && npm run build && npm run package && npm run publish:npm",
-    "release:full": "npm run build && npm run package && npm run publish:vsce && npm run publish:ovsx && npm run publish:npm"
+    "prerelease": "npm run test",
+    "release": "npm version patch && git push && git push --tags",
+    "release:local": "npm run build && npm run package && source .env 2>/dev/null; npm publish && npx ovsx publish *.vsix -p $OVSX_TOKEN"
   },
   "devDependencies": {
     "@types/node": "^25.4.0",

@@ -58,6 +58,14 @@ Or run directly without installing:
 npx promptrail timeline
 ```
 
+### Cursor Extension
+
+Install from [Open VSX](https://open-vsx.org/extension/thisalihassan/promptrail):
+
+```bash
+cursor --install-extension thisalihassan.promptrail
+```
+
 ### From Source (CLI + Extension)
 
 ```bash
@@ -80,14 +88,11 @@ Or run it directly without linking:
 node dist/cli.js timeline
 ```
 
-To install the editor extension:
+To install the extension locally:
 
 ```bash
 npm run package
-# Cursor
 cursor --install-extension promptrail-*.vsix
-# VS Code
-code --install-extension promptrail-*.vsix
 ```
 
 ### Claude Code Plugin
@@ -106,7 +111,7 @@ Once installed, Claude Code sessions are automatically tracked -- no extra comma
 
 ### For Development
 
-Open the repo in Cursor/VS Code and press `F5` to launch the Extension Development Host.
+Open the repo in Cursor and press `F5` to launch the Extension Development Host.
 
 ## CLI Usage
 
