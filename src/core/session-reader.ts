@@ -249,6 +249,35 @@ export class SessionReader {
     return tasks;
   }
 
+  /**
+   * When multiple consecutive prompts share the exact same timestamp
+   * (happens after Cursor updates or session migration), spread them
+   * out so each prompt gets a nonzero time window for file matching.
+   */
+  private deduplicateTimestamps(
+    raw: number[] | undefined,
+    promptCount: number,
+    fallbackMod: number
+  ): number[] {
+    const result: number[] = [];
+
+    for (let i = 0; i < promptCount; i++) {
+      const ts =
+        raw && raw[i] && raw[i] > 0
+          ? raw[i]
+          : fallbackMod - (promptCount - i) * 30_000;
+      result.push(ts);
+    }
+
+    for (let i = 1; i < result.length; i++) {
+      if (result[i] <= result[i - 1]) {
+        result[i] = result[i - 1] + 1;
+      }
+    }
+
+    return result;
+  }
+
   private parseCursorSession(
     filePath: string,
     composerId: string,
@@ -273,11 +302,17 @@ export class SessionReader {
       }
     }
 
-    const realTimestamps =
+    const rawTimestamps =
       this.cursorHistory.getUserBubbleTimestamps(composerId);
 
     const stat = fs.statSync(filePath);
     const fallbackMod = stat.mtimeMs;
+
+    const realTimestamps = this.deduplicateTimestamps(
+      rawTimestamps,
+      prompts.length,
+      fallbackMod
+    );
 
     for (let i = 0; i < prompts.length; i++) {
       if (cur) {
@@ -285,10 +320,7 @@ export class SessionReader {
         tasks.push(cur);
       }
 
-      const ts =
-        realTimestamps && realTimestamps[i] && realTimestamps[i] > 0
-          ? realTimestamps[i]
-          : fallbackMod - (prompts.length - i) * 30_000;
+      const ts = realTimestamps[i];
 
       cur = {
         id: `cur-${composerId.slice(0, 8)}-${taskIdx++}`,

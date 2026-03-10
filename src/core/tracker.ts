@@ -87,7 +87,6 @@ export class Tracker {
       const sorted = [...tasks].sort(
         (a, b) => a.createdAt - b.createdAt
       );
-      const claudeWindows = this.buildClaudeWindows(sorted);
       const idx = sorted.findIndex((t) => t.id === taskId);
       const startTs = task.createdAt;
       const endTs =
@@ -95,8 +94,7 @@ export class Tracker {
 
       const { changes } = this.fileWatcher.getChangesInWindow(
         startTs,
-        endTs,
-        claudeWindows
+        endTs
       );
       if (changes.length > 0) {
         return { taskId, changes };
@@ -154,7 +152,6 @@ export class Tracker {
       const sorted = [...tasks].sort(
         (a, b) => a.createdAt - b.createdAt
       );
-      const claudeWindows = this.buildClaudeWindows(sorted);
       const idx = sorted.findIndex((t) => t.id === taskId);
       const startTs = task.createdAt;
       const endTs =
@@ -162,8 +159,7 @@ export class Tracker {
 
       const changes = this.fileWatcher.getRollbackForWindow(
         startTs,
-        endTs,
-        claudeWindows
+        endTs
       );
       if (changes.length === 0) return false;
 

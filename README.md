@@ -58,27 +58,55 @@ Or run directly without installing:
 npx promptrail timeline
 ```
 
-### Editor Extension
-
-> The extension is in beta. Install from source for now.
+### From Source (CLI + Extension)
 
 ```bash
 git clone https://github.com/thisalihassan/promptrail
 cd promptrail
 npm install
 npm run build
-npm run package
 ```
 
-Then install the generated `.vsix`:
+Install the CLI globally from the local build:
 
 ```bash
+npm link
+# Now you can run: promptrail timeline
+```
+
+Or run it directly without linking:
+
+```bash
+node dist/cli.js timeline
+```
+
+To install the editor extension:
+
+```bash
+npm run package
 # Cursor
 cursor --install-extension promptrail-*.vsix
-
 # VS Code
 code --install-extension promptrail-*.vsix
 ```
+
+### Claude Code Plugin
+
+Promptrail includes a Claude Code plugin that auto-tracks prompts and file edits via hooks:
+
+```bash
+# Install for all sessions
+claude plugin install /path/to/promptrail/claude-plugin
+
+# Or use for a single session
+claude --plugin-dir /path/to/promptrail/claude-plugin
+```
+
+Once installed, Claude Code sessions are automatically tracked -- no extra commands needed. The timeline, diffs, and rollback all work through the CLI or the editor extension.
+
+### For Development
+
+Open the repo in Cursor/VS Code and press `F5` to launch the Extension Development Host.
 
 ## CLI Usage
 

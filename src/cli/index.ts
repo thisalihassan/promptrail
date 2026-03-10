@@ -130,18 +130,20 @@ function cmdTimeline(flags: Flags): void {
     return;
   }
 
-  const sorted = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
+  const chronological = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
+  const sorted = [...chronological].reverse();
 
   console.log();
   for (let i = 0; i < sorted.length; i++) {
     const t = sorted[i];
+    const chronIdx = chronological.indexOf(t);
     const src = t.source || "unknown";
     const srcLabel = src === "cursor" ? `${BLUE}cursor${RESET}` : src === "claude" ? `${MAGENTA}claude${RESET}` : `${DIM}${src}${RESET}`;
 
     let files = t.filesChanged;
     if (t.source === "cursor" && snapshots.length > 0) {
       const startTs = t.createdAt;
-      const endTs = i + 1 < sorted.length ? sorted[i + 1].createdAt : Date.now();
+      const endTs = chronIdx + 1 < chronological.length ? chronological[chronIdx + 1].createdAt : Date.now();
       const changes = getChangesInWindow(snapshots, startTs, endTs);
       if (changes.length > 0) files = changes.map((c) => c.relativePath);
     }
@@ -153,7 +155,7 @@ function cmdTimeline(flags: Flags): void {
       : `${DIM}no changes${RESET}`;
     const time = `${DIM}${timeAgo(t.createdAt)}${RESET}`;
     const model = t.model ? `${DIM}[${t.model.replace("claude-", "").replace("-thinking", "")}]${RESET}` : "";
-    const idx = `${DIM}#${i}${RESET}`;
+    const idx = `${DIM}#${chronIdx}${RESET}`;
 
     console.log(`  ${dot} ${idx} ${srcLabel} ${truncate(t.prompt, 60)}  ${fileCount}  ${time} ${model}`);
 

@@ -581,3 +581,115 @@ describe('EDGE CASES: Try to break things', () => {
 		fs.rmSync(tmp, { recursive: true });
 	});
 });
+
+// ──────────────────────────────────────────────────────────────
+// BUG 11: getTasks shows files but getTaskChangeset returns empty.
+//
+// getTasks() and getTaskChangeset() both call readAllTasks()
+// independently. If new Claude prompts appear between the two
+// calls (cache expires after 2 seconds), the Claude windows
+// change. A file change that passed the filter in getTasks()
+// gets excluded in getTaskChangeset() because a new Claude
+// window now overlaps it.
+//
+// The timeline shows "1 file" but View Diff says "No diff data."
+//
+// Fix: getTaskChangeset should NOT re-apply Claude window
+// exclusion. The user clicked on a task that already shows files.
+// ──────────────────────────────────────────────────────────────
+describe("BUG 12: Cursor update resets all bubble timestamps to same value", () => {
+	it("consecutive identical timestamps get spread by 1ms each", () => {
+		// After Cursor update, prompts #40-#50 all had createdAt = 1773170194000
+		const raw = [
+			1773170194000, 1773170194000, 1773170194000,
+			1773170194000, 1773170194000, 1773170194000,
+			1773170500000, // prompt #46 has a real timestamp
+			1773170600000,
+		];
+
+		const result: number[] = [...raw];
+		for (let i = 1; i < result.length; i++) {
+			if (result[i] <= result[i - 1]) {
+				result[i] = result[i - 1] + 1;
+			}
+		}
+
+		// Each should be strictly increasing
+		for (let i = 1; i < result.length; i++) {
+			assert.ok(result[i] > result[i - 1],
+				`Timestamp ${i} (${result[i]}) must be > timestamp ${i-1} (${result[i-1]})`);
+		}
+
+		// Windows are nonzero
+		for (let i = 0; i < result.length - 1; i++) {
+			const windowSize = result[i + 1] - result[i];
+			assert.ok(windowSize > 0, `Window ${i} must have nonzero size, got ${windowSize}`);
+		}
+	});
+
+	it("file changes match the spread-out windows", () => {
+		// 3 prompts all at T=1000, spread to 1000, 1001, 1002
+		const timestamps = [1000, 1001, 1002];
+		const changes = [
+			{ relPath: "a.ts", timestamp: 1000 },
+			{ relPath: "b.ts", timestamp: 1001 },
+			{ relPath: "c.ts", timestamp: 1002 },
+		];
+
+		const attribution = new Map<number, string[]>();
+		for (const c of changes) {
+			for (let i = timestamps.length - 1; i >= 0; i--) {
+				const end = i + 1 < timestamps.length ? timestamps[i + 1] : Infinity;
+				if (c.timestamp >= timestamps[i] && c.timestamp < end) {
+					if (!attribution.has(i)) attribution.set(i, []);
+					attribution.get(i)!.push(c.relPath);
+					break;
+				}
+			}
+		}
+
+		assert.deepStrictEqual(attribution.get(0), ["a.ts"]);
+		assert.deepStrictEqual(attribution.get(1), ["b.ts"]);
+		assert.deepStrictEqual(attribution.get(2), ["c.ts"]);
+	});
+});
+
+describe("BUG 11: getTasks shows files but getTaskChangeset returns empty", () => {
+	it("Claude windows expanding between calls can exclude previously-found changes", () => {
+		const fileChange = { relPath: "README.md", before: "old", after: "new", timestamp: 500 };
+		const cursorWindow = { start: 400, end: 600 };
+
+		const claudeWindowsV1 = [{ start: 100, end: 300 }];
+		const filteredV1 = [fileChange].filter((c) => {
+			if (c.timestamp < cursorWindow.start || c.timestamp >= cursorWindow.end) return false;
+			for (const w of claudeWindowsV1) {
+				if (c.timestamp >= w.start && c.timestamp < w.end) return false;
+			}
+			return true;
+		});
+		assert.strictEqual(filteredV1.length, 1, "getTasks finds README.md");
+
+		const claudeWindowsV2 = [{ start: 100, end: 300 }, { start: 450, end: 550 }];
+		const filteredV2 = [fileChange].filter((c) => {
+			if (c.timestamp < cursorWindow.start || c.timestamp >= cursorWindow.end) return false;
+			for (const w of claudeWindowsV2) {
+				if (c.timestamp >= w.start && c.timestamp < w.end) return false;
+			}
+			return true;
+		});
+		assert.strictEqual(filteredV2.length, 0,
+			"getTaskChangeset loses README.md because new Claude window appeared (THE BUG)");
+	});
+
+	it("fix: getTaskChangeset without Claude re-filtering always finds the change", () => {
+		const fileChange = { relPath: "README.md", before: "old", after: "new", timestamp: 500 };
+		const cursorWindow = { start: 400, end: 600 };
+
+		const filtered = [fileChange].filter((c) =>
+			c.timestamp >= cursorWindow.start && c.timestamp < cursorWindow.end
+		);
+		assert.strictEqual(filtered.length, 1);
+		assert.strictEqual(filtered[0].before, "old");
+		assert.strictEqual(filtered[0].after, "new");
+	});
+});

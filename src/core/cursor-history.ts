@@ -264,7 +264,12 @@ export class CursorHistory {
     fsPath = decodeURIComponent(fsPath);
 
     if (fsPath.startsWith(this.workspaceRoot + "/")) {
-      return fsPath.slice(this.workspaceRoot.length + 1);
+      let rel = fsPath.slice(this.workspaceRoot.length + 1);
+      const wsName = path.basename(this.workspaceRoot);
+      if (rel.startsWith(wsName + "/")) {
+        rel = rel.slice(wsName.length + 1);
+      }
+      return rel;
     }
     return fsPath;
   }
