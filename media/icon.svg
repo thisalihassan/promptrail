@@ -1,23 +1,9 @@
-<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background -->
-  <rect width="128" height="128" rx="16" fill="#1a1a2e"/>
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!-- Trail path -->
-  <path d="M24 100C24 100 36 72 48 60C60 48 64 54 72 42C80 30 86 18 96 22" stroke="#4fc1ff" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.4"/>
-  <!-- Glow behind trail -->
-  <path d="M24 100C24 100 36 72 48 60C60 48 64 54 72 42C80 30 86 18 96 22" stroke="#4fc1ff" stroke-width="8" stroke-linecap="round" fill="none" opacity="0.1"/>
+  <path d="M4 19C4 19 7 13 10 10C13 7 14 9 16 6C18 3 20 2 22 3" stroke="#C5C5C5" stroke-width="1.5" stroke-linecap="round" fill="none"/>
   <!-- Prompt waypoints -->
-  <circle cx="48" cy="60" r="6" fill="#4ec9b0"/>
-  <circle cx="72" cy="42" r="6" fill="#4ec9b0"/>
-  <circle cx="96" cy="22" r="6" fill="#4fc1ff"/>
-  <!-- Small inner dots -->
-  <circle cx="48" cy="60" r="2.5" fill="#1a1a2e"/>
-  <circle cx="72" cy="42" r="2.5" fill="#1a1a2e"/>
-  <circle cx="96" cy="22" r="2.5" fill="#1a1a2e"/>
-  <!-- Diff + marker -->
-  <line x1="96" y1="80" x2="96" y2="96" stroke="#4ec9b0" stroke-width="3.5" stroke-linecap="round"/>
-  <line x1="88" y1="88" x2="104" y2="88" stroke="#4ec9b0" stroke-width="3.5" stroke-linecap="round"/>
-  <!-- Diff - marker -->
-  <line x1="20" y1="32" x2="40" y2="32" stroke="#f14c4c" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <circle cx="10" cy="10" r="2.5" fill="#C5C5C5"/>
+  <circle cx="16" cy="6" r="2.5" fill="#C5C5C5"/>
   <!-- Start dot -->
-  <circle cx="24" cy="100" r="4" fill="#4fc1ff" opacity="0.5"/>
+  <circle cx="4" cy="19" r="1.5" fill="#C5C5C5" opacity="0.5"/>
 </svg>

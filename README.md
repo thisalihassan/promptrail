@@ -44,9 +44,45 @@ Promptrail reads your AI sessions automatically — no manual tagging, no config
 | `Promptrail: Rollback to Task` | Restore workspace to before a prompt's edits |
 | `Promptrail: Export Chat to Markdown` | Export a conversation as `.md` |
 
-## CLI
+## Installation
 
-Promptrail also ships a standalone CLI that works from any terminal — no editor needed.
+### CLI
+
+```bash
+npm install -g promptrail
+```
+
+Or run directly without installing:
+
+```bash
+npx promptrail timeline
+```
+
+### Editor Extension
+
+> The extension is in beta. Install from source for now.
+
+```bash
+git clone https://github.com/thisalihassan/promptrail
+cd promptrail
+npm install
+npm run build
+npm run package
+```
+
+Then install the generated `.vsix`:
+
+```bash
+# Cursor
+cursor --install-extension promptrail-*.vsix
+
+# VS Code
+code --install-extension promptrail-*.vsix
+```
+
+## CLI Usage
+
+Run from your project root:
 
 ```bash
 promptrail timeline              # List all prompts with file counts and model badges
@@ -55,15 +91,38 @@ promptrail diff 3                # Show diff for prompt #3
 promptrail diff "refactor auth"  # Diff for prompt matching text
 promptrail rollback 5            # Rollback prompt #5's changes
 promptrail sessions              # List all sessions
+promptrail migrate ../old-project  # Copy sessions from another workspace
 ```
 
-Shortcuts: `tl` for timeline, `d` for diff, `rb` for rollback, `s` for sessions.
+### Filters
 
-After installing globally (`npm install -g .` or via `npx`), run from your project root.
+```bash
+promptrail timeline -s claude    # Only Claude Code prompts
+promptrail timeline -s cursor    # Only Cursor prompts
+promptrail timeline -m sonnet    # Only prompts using sonnet models
+```
 
-## Installation
+Shortcuts: `tl` for timeline, `d` for diff, `rb` for rollback, `s` for sessions, `mg` for migrate.
 
-Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=thisalihassan.promptrail) or search "Promptrail" in Cursor/VS Code extensions.
+### Session Migration
+
+AI agents often edit files across workspace boundaries. You're working on a backend repo and Cursor starts editing the frontend, or Claude Code touches a shared library in a different project. The chats live in the wrong workspace — you can't see the timeline, diffs, or rollback where the changes actually happened.
+
+`migrate` copies all session history from one workspace to another so you can track everything from the right place.
+
+```bash
+cd /path/to/frontend
+promptrail migrate /path/to/backend
+```
+
+**What gets copied:**
+
+- **Cursor chats** — transcripts and sidebar entries, so imported chats show up in Cursor's chat panel
+- **Cursor metadata** — timestamps, file attribution, checkpoints, code blocks
+- **Claude Code sessions** — session files including subagent and tool-result data
+- **File snapshots** — change history merged with deduplication
+
+All embedded workspace paths are automatically rewritten from source to target. The source workspace is never modified — everything is copied, not moved.
 
 ## Platform Support
 

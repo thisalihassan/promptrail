@@ -1,10 +1,25 @@
 {
   "name": "promptrail",
-  "displayName": "Promptrail — Prompt-Level Version Control",
+  "displayName": "promptrail",
   "description": "See what every AI prompt changed. Reads Claude Code and Cursor sessions automatically. Browse, diff, and rollback by intent.",
   "version": "0.3.0",
-  "publisher": "promptrail",
+  "files": [
+    "dist/cli.js",
+    "dist/extension.js",
+    "media/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publisher": "thisalihassan",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thisalihassan/promptrail.git"
+  },
+  "homepage": "https://github.com/thisalihassan/promptrail#readme",
+  "bugs": {
+    "url": "https://github.com/thisalihassan/promptrail/issues"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -23,12 +38,13 @@
     "claude",
     "vibe coding"
   ],
+  "icon": "media/icon.png",
   "activationEvents": [
     "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "bin": {
-    "promptrail": "./dist/cli.js"
+    "promptrail": "dist/cli.js"
   },
   "contributes": {
     "viewsContainers": {
@@ -95,7 +111,9 @@
     "lint": "tsc --noEmit",
     "test": "node esbuild.mjs test && cp -r tests/fixtures dist-tests/fixtures 2>/dev/null; node --test dist-tests/index.js",
     "package": "npx @vscode/vsce package",
-    "release": "npm run build && npm run package && npm version patch --no-git-tag-version"
+    "release": "npm run build && npx @vscode/vsce publish patch",
+    "release:minor": "npm run build && npx @vscode/vsce publish minor",
+    "release:major": "npm run build && npx @vscode/vsce publish major"
   },
   "devDependencies": {
     "@types/node": "^25.4.0",
