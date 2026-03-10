@@ -3,13 +3,6 @@
   "displayName": "promptrail",
   "description": "See what every AI prompt changed. Reads Claude Code and Cursor sessions automatically. Browse, diff, and rollback by intent.",
   "version": "0.3.0",
-  "files": [
-    "dist/cli.js",
-    "dist/extension.js",
-    "media/",
-    "README.md",
-    "LICENSE"
-  ],
   "publisher": "thisalihassan",
   "license": "MIT",
   "repository": {
