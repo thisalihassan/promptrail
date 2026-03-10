@@ -10,5 +10,6 @@ claude-plugin/
 demo/
 node_modules/
 CLAUDE.md
+CONTRIBUTING.md
 conversation-*.md
 *.vsix
