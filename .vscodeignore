@@ -1,11 +1,14 @@
 .gitignore
 src/
+tests/
+dist-tests/
 tsconfig.json
 esbuild.mjs
 **/*.map
 .promptrail/
 .claude/
 .cursor/
+.github/
 claude-plugin/
 demo/
 node_modules/
@@ -14,5 +17,7 @@ CONTRIBUTING.md
 PUBLISHING.md
 ROADMAP.md
 .npmignore
+.env
+.env.example
 conversation-*.md
 *.vsix
