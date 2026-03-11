@@ -4,6 +4,11 @@ import * as fs from "fs";
 import type { Task, TaskChangeset, FileChange } from "../models/types";
 import { SessionReader, type TaskWithEdits } from "./session-reader";
 import { FileWatcher } from "./file-watcher";
+import {
+  selectiveRevert,
+  revertStringEdits,
+  type RollbackResult,
+} from "./selective-revert";
 
 export class Tracker {
   private sessionReader: SessionReader;
@@ -143,10 +148,21 @@ export class Tracker {
     return { taskId: task.id, changes };
   }
 
-  async rollbackToTask(taskId: string): Promise<boolean> {
+  async rollbackToTask(taskId: string): Promise<RollbackResult> {
     const tasks = this.sessionReader.readAllTasks();
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return false;
+    const task = tasks.find((t) => t.id === taskId) as
+      | TaskWithEdits
+      | undefined;
+    const empty: RollbackResult = {
+      success: false,
+      filesReverted: [],
+      conflicts: [],
+    };
+    if (!task) return empty;
+
+    if (task.source === "claude") {
+      return this.selectiveRollbackClaude(task);
+    }
 
     if (task.source === "cursor") {
       const sorted = [...tasks].sort(
@@ -157,32 +173,190 @@ export class Tracker {
       const endTs =
         idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
 
-      const changes = this.fileWatcher.getRollbackForWindow(
-        startTs,
-        endTs
-      );
-      if (changes.length === 0) return false;
-
-      for (const change of changes) {
-        const absPath = path.join(
-          this.workspaceRoot,
-          change.relativePath
-        );
-        if (change.type === "deleted") {
-          if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
-        } else if (change.after !== undefined) {
-          const dir = path.dirname(absPath);
-          if (!fs.existsSync(dir))
-            fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(absPath, change.after, "utf-8");
-        }
-      }
-
-      this.onDidChangeEmitter.fire();
-      return true;
+      return this.selectiveRollbackWatcher(startTs, endTs);
     }
 
-    return false;
+    return empty;
+  }
+
+  private selectiveRollbackWatcher(
+    startTs: number,
+    endTs: number
+  ): RollbackResult {
+    const result: RollbackResult = {
+      success: false,
+      filesReverted: [],
+      conflicts: [],
+    };
+
+    const { changes } = this.fileWatcher.getChangesInWindow(startTs, endTs);
+    if (changes.length === 0) return result;
+
+    for (const change of changes) {
+      const absPath = path.join(this.workspaceRoot, change.relativePath);
+
+      if (change.type === "added") {
+        // File was created by this prompt
+        let currentContent: string | undefined;
+        try {
+          currentContent = fs.readFileSync(absPath, "utf-8");
+        } catch {}
+
+        if (currentContent === undefined) {
+          // Already deleted, skip
+          continue;
+        }
+
+        if (currentContent === change.after) {
+          // No subsequent changes — safe to delete
+          fs.unlinkSync(absPath);
+          result.filesReverted.push({
+            path: change.relativePath,
+            status: "deleted",
+          });
+        } else {
+          result.conflicts.push({
+            path: change.relativePath,
+            reason:
+              "File was created by this prompt but later modified — cannot safely delete",
+          });
+        }
+        continue;
+      }
+
+      if (change.type === "deleted") {
+        // File was deleted by this prompt — recreate with before content
+        if (fs.existsSync(absPath)) {
+          result.conflicts.push({
+            path: change.relativePath,
+            reason:
+              "File was deleted by this prompt but has been recreated since",
+          });
+        } else {
+          const dir = path.dirname(absPath);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(absPath, change.before ?? "", "utf-8");
+          result.filesReverted.push({
+            path: change.relativePath,
+            status: "recreated",
+          });
+        }
+        continue;
+      }
+
+      // Modified file — selective revert
+      let currentContent: string;
+      try {
+        currentContent = fs.readFileSync(absPath, "utf-8");
+      } catch {
+        result.conflicts.push({
+          path: change.relativePath,
+          reason: "File no longer exists on disk",
+        });
+        continue;
+      }
+
+      const revert = selectiveRevert(
+        change.before ?? "",
+        change.after ?? "",
+        currentContent
+      );
+
+      if (revert.applied > 0) {
+        fs.writeFileSync(absPath, revert.content, "utf-8");
+        result.filesReverted.push({
+          path: change.relativePath,
+          status: "reverted",
+        });
+      }
+
+      for (const c of revert.conflicts) {
+        result.conflicts.push({
+          path: change.relativePath,
+          reason: c.description,
+        });
+      }
+    }
+
+    result.success = result.filesReverted.length > 0;
+    this.onDidChangeEmitter.fire();
+    return result;
+  }
+
+  private selectiveRollbackClaude(task: TaskWithEdits): RollbackResult {
+    const result: RollbackResult = {
+      success: false,
+      filesReverted: [],
+      conflicts: [],
+    };
+
+    // Revert writes (file creations) first
+    if (task.writes && task.writes.length > 0) {
+      for (const write of task.writes) {
+        const absPath = path.join(this.workspaceRoot, write.file);
+        let currentContent: string | undefined;
+        try {
+          currentContent = fs.readFileSync(absPath, "utf-8");
+        } catch {}
+
+        if (currentContent === undefined) continue;
+
+        if (currentContent === write.content) {
+          fs.unlinkSync(absPath);
+          result.filesReverted.push({ path: write.file, status: "deleted" });
+        } else {
+          result.conflicts.push({
+            path: write.file,
+            reason:
+              "File was created by this prompt but later modified — cannot safely delete",
+          });
+        }
+      }
+    }
+
+    // Revert edits with exact string matching
+    if (task.edits && task.edits.length > 0) {
+      const byFile = new Map<
+        string,
+        Array<{ oldString: string; newString: string }>
+      >();
+      for (const edit of task.edits) {
+        if (!byFile.has(edit.file)) byFile.set(edit.file, []);
+        byFile.get(edit.file)!.push({
+          oldString: edit.oldString,
+          newString: edit.newString,
+        });
+      }
+
+      for (const [file, edits] of byFile) {
+        const absPath = path.join(this.workspaceRoot, file);
+        let currentContent: string;
+        try {
+          currentContent = fs.readFileSync(absPath, "utf-8");
+        } catch {
+          result.conflicts.push({
+            path: file,
+            reason: "File no longer exists on disk",
+          });
+          continue;
+        }
+
+        const revert = revertStringEdits(currentContent, edits);
+
+        if (revert.applied > 0) {
+          fs.writeFileSync(absPath, revert.content, "utf-8");
+          result.filesReverted.push({ path: file, status: "reverted" });
+        }
+
+        for (const c of revert.conflicts) {
+          result.conflicts.push({ path: file, reason: c.description });
+        }
+      }
+    }
+
+    result.success = result.filesReverted.length > 0;
+    this.onDidChangeEmitter.fire();
+    return result;
   }
 
   refresh(): void {

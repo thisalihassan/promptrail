@@ -9,6 +9,10 @@ import {
   importSummary,
   type ExportData,
 } from "../core/migrator";
+import {
+  selectiveRevert,
+  revertStringEdits,
+} from "../core/selective-revert";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -308,36 +312,140 @@ function cmdRollback(selector: string): void {
     process.exit(1);
   }
 
-  const idx = sorted.indexOf(task);
-  const snapshots = readSnapshots(wsRoot);
-  const startTs = task.createdAt;
-  const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-  const changes = getChangesInWindow(snapshots, startTs, endTs);
+  console.log(`${BOLD}Selectively reverting:${RESET} ${truncate(task.prompt, 70)}`);
 
-  if (changes.length === 0) {
-    console.log(`${DIM}No snapshot data to rollback for this prompt.${RESET}`);
-    return;
-  }
+  let reverted = 0;
+  let conflicts = 0;
 
-  console.log(`${BOLD}Rolling back:${RESET} ${truncate(task.prompt, 70)}`);
-  console.log(`${DIM}Restoring ${changes.length} file(s)...${RESET}\n`);
+  if (task.source === "claude") {
+    const te = task as TaskWithEdits;
 
-  for (const change of changes) {
-    const absPath = path.join(wsRoot, change.relativePath);
-    if (change.type === "added") {
-      if (fs.existsSync(absPath)) {
-        fs.unlinkSync(absPath);
-        console.log(`  ${RED}deleted${RESET} ${change.relativePath}`);
+    // Revert writes (file creations)
+    if (te.writes && te.writes.length > 0) {
+      for (const write of te.writes) {
+        const absPath = path.join(wsRoot, write.file);
+        let currentContent: string | undefined;
+        try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {}
+
+        if (currentContent === undefined) continue;
+        if (currentContent === write.content) {
+          fs.unlinkSync(absPath);
+          console.log(`  ${RED}deleted${RESET} ${write.file}`);
+          reverted++;
+        } else {
+          console.log(`  ${YELLOW}CONFLICT${RESET} ${write.file} — created by this prompt but later modified`);
+          conflicts++;
+        }
       }
-    } else {
-      const dir = path.dirname(absPath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(absPath, change.before ?? "", "utf-8");
-      console.log(`  ${YELLOW}restored${RESET} ${change.relativePath}`);
+    }
+
+    // Revert edits with exact string matching
+    if (te.edits && te.edits.length > 0) {
+      const byFile = new Map<string, Array<{ oldString: string; newString: string }>>();
+      for (const edit of te.edits) {
+        if (!byFile.has(edit.file)) byFile.set(edit.file, []);
+        byFile.get(edit.file)!.push({ oldString: edit.oldString, newString: edit.newString });
+      }
+
+      for (const [file, edits] of byFile) {
+        const absPath = path.join(wsRoot, file);
+        let currentContent: string;
+        try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {
+          console.log(`  ${YELLOW}CONFLICT${RESET} ${file} — file no longer exists`);
+          conflicts++;
+          continue;
+        }
+
+        const result = revertStringEdits(currentContent, edits);
+        if (result.applied > 0) {
+          fs.writeFileSync(absPath, result.content, "utf-8");
+          console.log(`  ${GREEN}reverted${RESET} ${file} (${result.applied} edit${result.applied === 1 ? "" : "s"})`);
+          reverted++;
+        }
+        for (const c of result.conflicts) {
+          console.log(`  ${YELLOW}CONFLICT${RESET} ${file} — ${c.description}`);
+          conflicts++;
+        }
+      }
+    }
+  } else {
+    // Cursor or other: use watcher snapshots
+    const idx = sorted.indexOf(task);
+    const snapshots = readSnapshots(wsRoot);
+    const startTs = task.createdAt;
+    const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
+    const changes = getChangesInWindow(snapshots, startTs, endTs);
+
+    if (changes.length === 0) {
+      console.log(`${DIM}No snapshot data to rollback for this prompt.${RESET}`);
+      return;
+    }
+
+    console.log(`${DIM}Processing ${changes.length} file(s)...${RESET}\n`);
+
+    for (const change of changes) {
+      const absPath = path.join(wsRoot, change.relativePath);
+
+      if (change.type === "added") {
+        let currentContent: string | undefined;
+        try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {}
+        if (currentContent === undefined) continue;
+        if (currentContent === change.after) {
+          fs.unlinkSync(absPath);
+          console.log(`  ${RED}deleted${RESET} ${change.relativePath}`);
+          reverted++;
+        } else {
+          console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — created by this prompt but later modified`);
+          conflicts++;
+        }
+        continue;
+      }
+
+      if (change.type === "deleted") {
+        if (fs.existsSync(absPath)) {
+          console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — deleted by this prompt but recreated since`);
+          conflicts++;
+        } else {
+          const dir = path.dirname(absPath);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(absPath, change.before ?? "", "utf-8");
+          console.log(`  ${GREEN}recreated${RESET} ${change.relativePath}`);
+          reverted++;
+        }
+        continue;
+      }
+
+      // Modified file — selective revert
+      let currentContent: string;
+      try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {
+        console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — file no longer exists`);
+        conflicts++;
+        continue;
+      }
+
+      const result = selectiveRevert(change.before ?? "", change.after ?? "", currentContent);
+      if (result.applied > 0) {
+        fs.writeFileSync(absPath, result.content, "utf-8");
+        console.log(`  ${GREEN}reverted${RESET} ${change.relativePath} (${result.applied} hunk${result.applied === 1 ? "" : "s"})`);
+        reverted++;
+      }
+      for (const c of result.conflicts) {
+        console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — ${c.description}`);
+        conflicts++;
+      }
     }
   }
 
-  console.log(`\n${GREEN}Rollback complete.${RESET}`);
+  console.log();
+  if (reverted > 0 && conflicts === 0) {
+    console.log(`${GREEN}Selective revert complete — ${reverted} file(s) reverted.${RESET}`);
+  } else if (reverted > 0 && conflicts > 0) {
+    console.log(`${YELLOW}Partial revert — ${reverted} file(s) reverted, ${conflicts} conflict(s).${RESET}`);
+  } else if (conflicts > 0) {
+    console.log(`${RED}Could not revert — all ${conflicts} file(s) have conflicts with later edits.${RESET}`);
+  } else {
+    console.log(`${DIM}No changes to revert.${RESET}`);
+  }
 }
 
 function cmdSessions(flags: Flags): void {

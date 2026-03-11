@@ -109,9 +109,25 @@ export function activate(context: vscode.ExtensionContext): void {
 
         if (confirm !== "Rollback") return;
 
-        const success = await tracker!.rollbackToTask(taskId);
-        if (success) {
-          vscode.window.showInformationMessage("Rollback complete.");
+        const result = await tracker!.rollbackToTask(taskId);
+        if (result.filesReverted.length > 0) {
+          const fileList = result.filesReverted
+            .map((f) => `${f.status}: ${f.path}`)
+            .join(", ");
+          const conflictNote =
+            result.conflicts.length > 0
+              ? ` (${result.conflicts.length} conflict${result.conflicts.length === 1 ? "" : "s"} — some changes could not be reverted)`
+              : "";
+          vscode.window.showInformationMessage(
+            `Selectively reverted ${result.filesReverted.length} file(s)${conflictNote}.`
+          );
+        } else if (result.conflicts.length > 0) {
+          const reasons = result.conflicts
+            .map((c) => `${c.path}: ${c.reason}`)
+            .join("\n");
+          vscode.window.showWarningMessage(
+            `Could not revert — all changes conflict with later edits. ${reasons}`
+          );
         } else {
           vscode.window.showErrorMessage(
             "Rollback failed. No snapshot data found for this task."
