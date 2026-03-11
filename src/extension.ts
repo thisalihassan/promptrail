@@ -94,24 +94,58 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "promptrail.rollbackToTask",
-      async (taskId?: string) => {
+      async (taskId?: string, mode?: "selective" | "hard") => {
         if (!taskId) {
           taskId = await pickTask("Rollback to before which task?");
         }
         if (!taskId) return;
 
+        if (!mode) {
+          const pick = await vscode.window.showQuickPick(
+            [
+              {
+                label: "$(git-pull-request) Cherry Revert",
+                description: "Undo only this prompt's changes, preserve later edits",
+                mode: "selective" as const,
+              },
+              {
+                label: "$(history) Restore Files",
+                description: "Restore files to exact state before this prompt (overwrites later edits)",
+                mode: "hard" as const,
+              },
+            ],
+            { title: "Choose rollback mode", placeHolder: "How should the rollback work?" }
+          );
+          if (!pick) return;
+          mode = pick.mode;
+        }
+
         const task = tracker!.getTasks().find((t) => t.id === taskId);
+        const modeLabel = mode === "hard" ? "Restore files" : "Cherry revert";
         const confirm = await vscode.window.showWarningMessage(
-          `Rollback "${truncate(task?.prompt ?? taskId, 40)}"? This restores files to their pre-edit state.`,
+          `${modeLabel} "${truncate(task?.prompt ?? taskId!, 40)}"?${mode === "hard" ? " This overwrites later changes to affected files." : ""}`,
           { modal: true },
           "Rollback"
         );
 
         if (confirm !== "Rollback") return;
 
-        const success = await tracker!.rollbackToTask(taskId);
-        if (success) {
-          vscode.window.showInformationMessage("Rollback complete.");
+        const result = await tracker!.rollbackToTask(taskId!, mode);
+        if (result.filesReverted.length > 0) {
+          const conflictNote =
+            result.conflicts.length > 0
+              ? ` (${result.conflicts.length} conflict${result.conflicts.length === 1 ? "" : "s"})`
+              : "";
+          vscode.window.showInformationMessage(
+            `${modeLabel}: ${result.filesReverted.length} file(s) restored${conflictNote}.`
+          );
+        } else if (result.conflicts.length > 0) {
+          const reasons = result.conflicts
+            .map((c) => `${c.path}: ${c.reason}`)
+            .join("\n");
+          vscode.window.showWarningMessage(
+            `Could not revert — all changes conflict with later edits. ${reasons}`
+          );
         } else {
           vscode.window.showErrorMessage(
             "Rollback failed. No snapshot data found for this task."
