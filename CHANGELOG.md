@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-11
+
+### Added
+- `promptrail --version` / `-v` CLI flag
+- Known Limitations section in README
+
+### Changed
+- Updated README with Cherry Revert / Restore Files rollback modes and `--hard` CLI flag
+- Updated ROADMAP with completed features
+- Rollback command description updated in package.json
+
+### Fixed
+- Action buttons (View Diff, Cherry Revert, Restore Files) no longer shown on prompts with no file changes
+
 ## [0.5.0] - 2026-03-11
 
 ### Added
@@ -23,7 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - File watcher no longer attributes `git pull` or manual user edits to AI prompts
-- Action buttons (View Diff, Cherry Revert, Restore Files) hidden on prompts with no file changes
 
 ## [0.4.3] - 2026-03-11
 
@@ -61,7 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/thisalihassan/promptrail/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/thisalihassan/promptrail/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/thisalihassan/promptrail/compare/v0.4.1...v0.4.3
 [0.4.1]: https://github.com/thisalihassan/promptrail/compare/v0.4.0...v0.4.1

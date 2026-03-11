@@ -67,7 +67,7 @@
       },
       {
         "command": "promptrail.rollbackToTask",
-        "title": "Rollback to Task",
+        "title": "Rollback to Task (Cherry Revert / Restore Files)",
         "category": "Promptrail",
         "icon": "$(history)"
       },
