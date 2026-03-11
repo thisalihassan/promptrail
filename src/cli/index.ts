@@ -732,6 +732,12 @@ switch (command) {
   case "i":
     cmdImport(flags);
     break;
+  case "--version":
+  case "-v": {
+    const pkg = require("../../package.json");
+    console.log(pkg.version);
+    break;
+  }
   case "--help":
   case "-h":
   case undefined:
