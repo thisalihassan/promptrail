@@ -171,3 +171,194 @@ describe("Integration: Timestamp window matching", () => {
     assert.strictEqual(merged.get("b.ts")!.after, "b2");
   });
 });
+
+describe("toolEditedFiles whitelist filtering", () => {
+  // Simulates what tracker.ts does: watcher returns files,
+  // whitelist filters them. This is the exact integration point
+  // where the "informational prompt shows 6 files" bug lived.
+
+  function applyWhitelist(
+    watcherFiles: string[],
+    whitelist: Set<string> | undefined
+  ): string[] {
+    return whitelist
+      ? watcherFiles.filter((f) => whitelist.has(f))
+      : watcherFiles;
+  }
+
+  it("whitelist with files: only matching files pass through", () => {
+    const watcher = ["a.ts", "b.ts", "c.ts"];
+    const whitelist = new Set(["a.ts", "c.ts"]);
+    const result = applyWhitelist(watcher, whitelist);
+    assert.deepStrictEqual(result, ["a.ts", "c.ts"]);
+  });
+
+  it("empty whitelist (informational prompt): zero files pass through", () => {
+    const watcher = ["a.ts", "b.ts", "package.json"];
+    const whitelist = new Set<string>();
+    const result = applyWhitelist(watcher, whitelist);
+    assert.deepStrictEqual(result, []);
+  });
+
+  it("undefined whitelist (no SQLite data): all files pass through as fallback", () => {
+    const watcher = ["a.ts", "b.ts"];
+    const result = applyWhitelist(watcher, undefined);
+    assert.deepStrictEqual(result, ["a.ts", "b.ts"]);
+  });
+
+  it("whitelist excludes git pull / manual edits from watcher", () => {
+    const watcher = [
+      "src/tracker.ts",
+      "src/index.ts",
+      ".github/workflows/ci.yaml",
+      "package-lock.json",
+    ];
+    const whitelist = new Set(["src/tracker.ts", "src/index.ts"]);
+    const result = applyWhitelist(watcher, whitelist);
+    assert.deepStrictEqual(result, ["src/tracker.ts", "src/index.ts"]);
+    assert.ok(!result.includes(".github/workflows/ci.yaml"));
+    assert.ok(!result.includes("package-lock.json"));
+  });
+
+  it("empty Set is truthy (critical for the undefined vs empty distinction)", () => {
+    const emptySet = new Set<string>();
+    assert.ok(emptySet, "empty Set must be truthy");
+    assert.strictEqual(emptySet.size, 0);
+
+    // This is the exact check tracker.ts uses
+    const whitelist: Set<string> | undefined = emptySet;
+    const filtered = whitelist
+      ? ["a.ts", "b.ts"].filter((f) => whitelist.has(f))
+      : ["a.ts", "b.ts"];
+    assert.deepStrictEqual(filtered, [], "empty Set should filter to nothing");
+  });
+});
+
+describe("perPromptFiles sets toolEditedFiles correctly", () => {
+  // Simulates what session-reader.ts does when SQLite data is available.
+  // This tests the fix: prompts WITHOUT edits get empty Set, not undefined.
+
+  it("prompts with edits get their file set, others get empty Set", () => {
+    const perPromptFiles = new Map<number, Set<string>>();
+    perPromptFiles.set(0, new Set(["src/app.ts"]));
+    // prompt 1 had no edits -- not in the map
+    perPromptFiles.set(2, new Set(["src/utils.ts", "src/helper.ts"]));
+
+    const tasks = [
+      { id: "t0", toolEditedFiles: undefined as Set<string> | undefined },
+      { id: "t1", toolEditedFiles: undefined as Set<string> | undefined },
+      { id: "t2", toolEditedFiles: undefined as Set<string> | undefined },
+    ];
+
+    // Apply the same logic as session-reader.ts
+    for (let i = 0; i < tasks.length; i++) {
+      tasks[i].toolEditedFiles = perPromptFiles.get(i) ?? new Set();
+    }
+
+    assert.ok(tasks[0].toolEditedFiles!.has("src/app.ts"));
+    assert.strictEqual(tasks[0].toolEditedFiles!.size, 1);
+
+    assert.strictEqual(tasks[1].toolEditedFiles!.size, 0, "informational prompt should have empty Set");
+    assert.ok(tasks[1].toolEditedFiles !== undefined, "should NOT be undefined");
+
+    assert.strictEqual(tasks[2].toolEditedFiles!.size, 2);
+  });
+
+  it("when perPromptFiles is undefined (no SQLite), toolEditedFiles stays undefined", () => {
+    const perPromptFiles: Map<number, Set<string>> | undefined = undefined;
+    const tasks = [
+      { id: "t0", toolEditedFiles: undefined as Set<string> | undefined },
+    ];
+
+    if (perPromptFiles) {
+      for (let i = 0; i < tasks.length; i++) {
+        tasks[i].toolEditedFiles = perPromptFiles.get(i) ?? new Set();
+      }
+    }
+
+    assert.strictEqual(tasks[0].toolEditedFiles, undefined, "should remain undefined without SQLite data");
+  });
+
+  it("the combined flow: no SQLite = fallback, SQLite + no edits = empty, SQLite + edits = filtered", () => {
+    const watcherFiles = ["a.ts", "b.ts", "manual-edit.ts"];
+
+    function applyWhitelist(
+      files: string[],
+      whitelist: Set<string> | undefined
+    ): string[] {
+      return whitelist ? files.filter((f) => whitelist.has(f)) : files;
+    }
+
+    // Case 1: no SQLite data at all
+    const noSqlite = applyWhitelist(watcherFiles, undefined);
+    assert.deepStrictEqual(noSqlite, ["a.ts", "b.ts", "manual-edit.ts"], "fallback: all files");
+
+    // Case 2: SQLite says this prompt edited a.ts only
+    const withEdits = applyWhitelist(watcherFiles, new Set(["a.ts"]));
+    assert.deepStrictEqual(withEdits, ["a.ts"], "filtered to AI edits only");
+
+    // Case 3: SQLite says this prompt had no edits (informational)
+    const noEdits = applyWhitelist(watcherFiles, new Set());
+    assert.deepStrictEqual(noEdits, [], "informational prompt: zero files");
+  });
+});
+
+describe("JSONL prompt count must match SQLite bubble count", () => {
+  it("short prompts like 'yes' and 'ok' must not be skipped (causes index drift)", () => {
+    // Simulates the exact bug: JSONL skips short prompts but SQLite counts all
+    // user bubbles, causing toolFormerData to map to the wrong prompt index.
+    const sqliteBubbles = [
+      { text: "refactor the auth module", hasEdits: true, editFiles: ["auth.ts"] },
+      { text: "yes", hasEdits: false, editFiles: [] },
+      { text: "add error handling", hasEdits: true, editFiles: ["handler.ts"] },
+    ];
+
+    // JSONL parser must produce the same count -- never skip any user message
+    const jsonlPrompts = sqliteBubbles.map((b) => b.text || "(empty)");
+
+    assert.strictEqual(
+      jsonlPrompts.length,
+      sqliteBubbles.length,
+      "JSONL must parse same number of prompts as SQLite has user bubbles"
+    );
+
+    // Now verify toolFormerData maps correctly
+    const perPromptFiles = new Map<number, Set<string>>();
+    for (let i = 0; i < sqliteBubbles.length; i++) {
+      if (sqliteBubbles[i].hasEdits) {
+        perPromptFiles.set(i, new Set(sqliteBubbles[i].editFiles));
+      }
+    }
+
+    // Apply to tasks (same logic as session-reader.ts)
+    const tasks = jsonlPrompts.map((text, i) => ({
+      prompt: text,
+      toolEditedFiles: perPromptFiles.get(i) ?? new Set<string>(),
+    }));
+
+    // Prompt 0 "refactor" should have auth.ts
+    assert.ok(tasks[0].toolEditedFiles.has("auth.ts"), "prompt 0 maps to auth.ts");
+    // Prompt 1 "yes" should have nothing (NOT auth.ts from drift!)
+    assert.strictEqual(tasks[1].toolEditedFiles.size, 0, "'yes' prompt has no edits");
+    // Prompt 2 "add error handling" should have handler.ts
+    assert.ok(tasks[2].toolEditedFiles.has("handler.ts"), "prompt 2 maps to handler.ts");
+  });
+
+  it("old behavior with >= 4 filter would cause index drift", () => {
+    // This test documents the bug that existed before the fix
+    const sqliteBubbles = ["refactor auth", "ok", "yes", "add tests"];
+    const jsonlWithOldFilter = sqliteBubbles.filter((t) => t.length >= 4);
+
+    assert.strictEqual(jsonlWithOldFilter.length, 2, "old filter drops 'ok' and 'yes'");
+    assert.strictEqual(sqliteBubbles.length, 4, "SQLite has all 4");
+    assert.notStrictEqual(
+      jsonlWithOldFilter.length,
+      sqliteBubbles.length,
+      "mismatch = index drift bug"
+    );
+
+    // With no filter, counts always match
+    const jsonlNoFilter = sqliteBubbles.map((t) => t || "(empty)");
+    assert.strictEqual(jsonlNoFilter.length, sqliteBubbles.length, "no filter: counts match");
+  });
+});
