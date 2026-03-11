@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-03-11
+
+### Fixed
+- Prompt-to-file attribution drift: short prompts ("yes", "ok") were skipped by JSONL parser but counted by SQLite, causing `toolFormerData` file edits to map to the wrong prompt
+- Informational prompts no longer show files from manual user actions (`git pull`, `npm version`, etc.) — `toolEditedFiles` now uses empty Set instead of undefined
+- Never skip user messages regardless of length — prompt index always matches SQLite bubble count
+
+### Added
+- 10 new integration tests for whitelist filtering, index alignment, and the undefined vs empty Set distinction
+
 ## [0.5.1] - 2026-03-11
 
 ### Added
@@ -74,7 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/thisalihassan/promptrail/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/thisalihassan/promptrail/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/thisalihassan/promptrail/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/thisalihassan/promptrail/compare/v0.4.1...v0.4.3
