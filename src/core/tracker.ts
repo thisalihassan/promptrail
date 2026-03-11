@@ -50,7 +50,10 @@ export class Tracker {
         claudeWindows
       );
       if (files.length > 0) {
-        sorted[i].filesChanged = files;
+        const whitelist = (sorted[i] as TaskWithEdits).toolEditedFiles;
+        sorted[i].filesChanged = whitelist
+          ? files.filter((f) => whitelist.has(f))
+          : files;
       }
     }
 
@@ -97,10 +100,15 @@ export class Tracker {
       const endTs =
         idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
 
-      const { changes } = this.fileWatcher.getChangesInWindow(
+      let { changes } = this.fileWatcher.getChangesInWindow(
         startTs,
         endTs
       );
+      if (task.toolEditedFiles) {
+        changes = changes.filter((c) =>
+          task.toolEditedFiles!.has(c.relativePath)
+        );
+      }
       if (changes.length > 0) {
         return { taskId, changes };
       }
@@ -148,7 +156,10 @@ export class Tracker {
     return { taskId: task.id, changes };
   }
 
-  async rollbackToTask(taskId: string): Promise<RollbackResult> {
+  async rollbackToTask(
+    taskId: string,
+    mode: "selective" | "hard" = "selective"
+  ): Promise<RollbackResult> {
     const tasks = this.sessionReader.readAllTasks();
     const task = tasks.find((t) => t.id === taskId) as
       | TaskWithEdits
@@ -159,6 +170,10 @@ export class Tracker {
       conflicts: [],
     };
     if (!task) return empty;
+
+    if (mode === "hard") {
+      return this.hardRollback(task, tasks);
+    }
 
     if (task.source === "claude") {
       return this.selectiveRollbackClaude(task);
@@ -173,15 +188,15 @@ export class Tracker {
       const endTs =
         idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
 
-      return this.selectiveRollbackWatcher(startTs, endTs);
+      return this.selectiveRollbackWatcher(startTs, endTs, task.toolEditedFiles);
     }
 
     return empty;
   }
 
-  private selectiveRollbackWatcher(
-    startTs: number,
-    endTs: number
+  private hardRollback(
+    task: TaskWithEdits,
+    tasks: TaskWithEdits[]
   ): RollbackResult {
     const result: RollbackResult = {
       success: false,
@@ -189,7 +204,66 @@ export class Tracker {
       conflicts: [],
     };
 
-    const { changes } = this.fileWatcher.getChangesInWindow(startTs, endTs);
+    if (task.source === "cursor") {
+      const sorted = [...tasks].sort(
+        (a, b) => a.createdAt - b.createdAt
+      );
+      const idx = sorted.findIndex((t) => t.id === task.id);
+      const startTs = task.createdAt;
+      const endTs =
+        idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
+
+      let changes = this.fileWatcher.getRollbackForWindow(startTs, endTs);
+      if (task.toolEditedFiles) {
+        changes = changes.filter((c) =>
+          task.toolEditedFiles!.has(c.relativePath)
+        );
+      }
+      if (changes.length === 0) return result;
+
+      for (const change of changes) {
+        const absPath = path.join(this.workspaceRoot, change.relativePath);
+        if (change.type === "deleted") {
+          if (fs.existsSync(absPath)) {
+            fs.unlinkSync(absPath);
+            result.filesReverted.push({
+              path: change.relativePath,
+              status: "deleted",
+            });
+          }
+        } else if (change.after !== undefined) {
+          const dir = path.dirname(absPath);
+          if (!fs.existsSync(dir))
+            fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(absPath, change.after, "utf-8");
+          result.filesReverted.push({
+            path: change.relativePath,
+            status: "reverted",
+          });
+        }
+      }
+    }
+
+    result.success = result.filesReverted.length > 0;
+    this.onDidChangeEmitter.fire();
+    return result;
+  }
+
+  private selectiveRollbackWatcher(
+    startTs: number,
+    endTs: number,
+    whitelist?: Set<string>
+  ): RollbackResult {
+    const result: RollbackResult = {
+      success: false,
+      filesReverted: [],
+      conflicts: [],
+    };
+
+    let { changes } = this.fileWatcher.getChangesInWindow(startTs, endTs);
+    if (whitelist) {
+      changes = changes.filter((c) => whitelist.has(c.relativePath));
+    }
     if (changes.length === 0) return result;
 
     for (const change of changes) {

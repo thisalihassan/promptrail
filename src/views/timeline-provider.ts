@@ -51,7 +51,12 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
         break;
       case "rollback":
         if (msg.taskId) {
-          vscode.commands.executeCommand("promptrail.rollbackToTask", msg.taskId);
+          vscode.commands.executeCommand("promptrail.rollbackToTask", msg.taskId, "selective");
+        }
+        break;
+      case "hardRollback":
+        if (msg.taskId) {
+          vscode.commands.executeCommand("promptrail.rollbackToTask", msg.taskId, "hard");
         }
         break;
       case "viewDiff":
@@ -605,10 +610,13 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
           }
           html += '</ul>';
         }
-        html += '<div class="task-actions">';
-        html += '<button class="action-btn" onclick="event.stopPropagation(); viewDiff(\\'' + t.id + '\\')">View Diff</button>';
-        html += '<button class="action-btn danger" onclick="event.stopPropagation(); rollback(\\'' + t.id + '\\')">Rollback</button>';
-        html += '</div>';
+        if (hasFiles) {
+          html += '<div class="task-actions">';
+          html += '<button class="action-btn" onclick="event.stopPropagation(); viewDiff(\\'' + t.id + '\\')">View Diff</button>';
+          html += '<button class="action-btn" onclick="event.stopPropagation(); rollback(\\'' + t.id + '\\')">Cherry Revert</button>';
+          html += '<button class="action-btn danger" onclick="event.stopPropagation(); hardRollback(\\'' + t.id + '\\')">Restore Files</button>';
+          html += '</div>';
+        }
         html += '</div>';
 
         html += '</div>';
@@ -657,6 +665,10 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
 
   function rollback(id) {
     vscode.postMessage({ type: 'rollback', taskId: id });
+  }
+
+  function hardRollback(id) {
+    vscode.postMessage({ type: 'hardRollback', taskId: id });
   }
 
   vscode.postMessage({ type: 'ready' });

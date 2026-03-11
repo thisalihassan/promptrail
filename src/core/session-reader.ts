@@ -19,6 +19,8 @@ export interface TaskWithEdits extends Task {
   edits?: EditRecord[];
   writes?: WriteRecord[];
   promptIndex?: number;
+  /** Files the AI actually edited per toolFormerData (Cursor only). Used as whitelist. */
+  toolEditedFiles?: Set<string>;
 }
 
 export class SessionReader {
@@ -342,6 +344,19 @@ export class SessionReader {
     }
 
     if (tasks.length === 0) return tasks;
+
+    // Per-prompt file whitelist from toolFormerData (ground truth from SQLite).
+    // This tells us exactly which files the AI edited per prompt,
+    // filtering out git pull / manual user edits that the watcher picks up.
+    const perPromptFiles =
+      this.cursorHistory.getPerPromptFiles(composerId);
+    if (perPromptFiles) {
+      for (const [promptIdx, files] of perPromptFiles) {
+        if (promptIdx < tasks.length) {
+          tasks[promptIdx].toolEditedFiles = files;
+        }
+      }
+    }
 
     // File attribution via SQLite bubble mapping (for initial first-edit info).
     // The file watcher will override filesChanged with real-time data for

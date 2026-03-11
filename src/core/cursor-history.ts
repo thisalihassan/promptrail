@@ -74,11 +74,23 @@ try {
   DatabaseSync = undefined;
 }
 
+const FILE_EDIT_TOOLS = new Set([
+  "edit_file_v2",
+  "write",
+  "delete_file",
+  "edit_file_v2_write",
+  "edit_file_v2_search_replace",
+  "edit_file",
+  "search_replace",
+  "apply_patch",
+]);
+
 interface SessionCache {
   data: any;
   session: ComposerSession;
   timestamps: number[];
   fileMapping: Map<string, number>;
+  perPromptFiles: Map<number, Set<string>>;
   cachedAt: number;
 }
 
@@ -208,11 +220,51 @@ export class CursorHistory {
         fileMapping.set(relPath, promptIdx);
       }
 
+      // Per-prompt file whitelist from toolFormerData
+      const perPromptFiles = new Map<number, Set<string>>();
+      const stmt2 = db.prepare(
+        "SELECT value FROM cursorDiskKV WHERE key = ?"
+      );
+      for (let u = 0; u < userBubbleIndices.length; u++) {
+        const startIdx = userBubbleIndices[u];
+        const endIdx =
+          u + 1 < userBubbleIndices.length
+            ? userBubbleIndices[u + 1]
+            : bubbles.length;
+
+        const files = new Set<string>();
+        for (let bi = startIdx; bi < endIdx; bi++) {
+          if (bubbles[bi].type !== 2) continue;
+          try {
+            const bRow = stmt2.get(
+              `bubbleId:${composerId}:${bubbles[bi].bubbleId}`
+            );
+            if (!bRow) continue;
+            const bData = JSON.parse(bRow.value);
+            const tfd = bData.toolFormerData;
+            if (!tfd || !FILE_EDIT_TOOLS.has(tfd.name)) continue;
+
+            const params = tfd.params
+              ? JSON.parse(tfd.params)
+              : {};
+            const fp: string =
+              params.relativeWorkspacePath || "";
+            if (!fp) continue;
+            const rel = this.uriToRelPath(fp);
+            if (rel) files.add(rel);
+          } catch {}
+        }
+        if (files.size > 0) {
+          perPromptFiles.set(u, files);
+        }
+      }
+
       const cached: SessionCache = {
         data,
         session,
         timestamps,
         fileMapping,
+        perPromptFiles,
         cachedAt: Date.now(),
       };
 
@@ -233,6 +285,13 @@ export class CursorHistory {
   getUserBubbleTimestamps(composerId: string): number[] | undefined {
     const cached = this.getOrLoadSession(composerId);
     return cached?.timestamps.length ? cached.timestamps : undefined;
+  }
+
+  getPerPromptFiles(
+    composerId: string
+  ): Map<number, Set<string>> | undefined {
+    const cached = this.getOrLoadSession(composerId);
+    return cached?.perPromptFiles.size ? cached.perPromptFiles : undefined;
   }
 
   getV0Content(composerId: string, relPath: string): string | undefined {

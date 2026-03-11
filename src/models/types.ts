@@ -31,6 +31,7 @@ export interface TaskChangeset {
 export interface TimelineMessage {
   type:
     | "rollback"
+    | "hardRollback"
     | "fork"
     | "viewDiff"
     | "endTask"

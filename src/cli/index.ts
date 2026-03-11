@@ -49,6 +49,7 @@ interface Flags {
   source?: string;  // "claude" | "cursor"
   model?: string;   // substring match against task.model
   files?: boolean;
+  hard?: boolean;
   positional: string[];
 }
 
@@ -61,6 +62,8 @@ function parseFlags(args: string[]): Flags {
       flags.model = args[++i].toLowerCase();
     } else if (args[i] === "--files" || args[i] === "-f") {
       flags.files = true;
+    } else if (args[i] === "--hard") {
+      flags.hard = true;
     } else {
       flags.positional.push(args[i]);
     }
@@ -149,7 +152,11 @@ function cmdTimeline(flags: Flags): void {
       const startTs = t.createdAt;
       const endTs = chronIdx + 1 < chronological.length ? chronological[chronIdx + 1].createdAt : Date.now();
       const changes = getChangesInWindow(snapshots, startTs, endTs);
-      if (changes.length > 0) files = changes.map((c) => c.relativePath);
+      if (changes.length > 0) {
+        const whitelist = (t as TaskWithEdits).toolEditedFiles;
+        const relPaths = changes.map((c) => c.relativePath);
+        files = whitelist ? relPaths.filter((f) => whitelist.has(f)) : relPaths;
+      }
     }
 
     const hasFiles = files.length > 0;
@@ -194,6 +201,10 @@ function cmdDiff(selector: string, flags: Flags = { positional: [] }): void {
     const startTs = task.createdAt;
     const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
     changes = getChangesInWindow(snapshots, startTs, endTs);
+    const whitelist = (task as TaskWithEdits).toolEditedFiles;
+    if (whitelist) {
+      changes = changes.filter((c) => whitelist.has(c.relativePath));
+    }
   } else if (task.source === "claude") {
     const te = task as TaskWithEdits;
     if (te.edits) {
@@ -300,7 +311,7 @@ function printSimpleDiff(beforeLines: string[], afterLines: string[]): void {
   }
 }
 
-function cmdRollback(selector: string): void {
+function cmdRollback(selector: string, hard = false): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
   const tasks = reader.readAllTasks();
@@ -312,12 +323,48 @@ function cmdRollback(selector: string): void {
     process.exit(1);
   }
 
-  console.log(`${BOLD}Selectively reverting:${RESET} ${truncate(task.prompt, 70)}`);
+  const modeLabel = hard ? "Restore files" : "Cherry revert";
+  console.log(`${BOLD}${modeLabel}:${RESET} ${truncate(task.prompt, 70)}`);
 
   let reverted = 0;
   let conflicts = 0;
 
-  if (task.source === "claude") {
+  if (hard) {
+    // Hard reset: restore files to exact state before this prompt
+    const idx = sorted.indexOf(task);
+    const snapshots = readSnapshots(wsRoot);
+    const startTs = task.createdAt;
+    const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
+    let changes = getChangesInWindow(snapshots, startTs, endTs);
+    const whitelist = (task as TaskWithEdits).toolEditedFiles;
+    if (whitelist) {
+      changes = changes.filter((c) => whitelist.has(c.relativePath));
+    }
+
+    if (changes.length === 0) {
+      console.log(`${DIM}No snapshot data to rollback for this prompt.${RESET}`);
+      return;
+    }
+
+    console.log(`${DIM}Restoring ${changes.length} file(s) to pre-prompt state...${RESET}\n`);
+
+    for (const change of changes) {
+      const absPath = path.join(wsRoot, change.relativePath);
+      if (change.type === "added") {
+        if (fs.existsSync(absPath)) {
+          fs.unlinkSync(absPath);
+          console.log(`  ${RED}deleted${RESET} ${change.relativePath}`);
+          reverted++;
+        }
+      } else {
+        const dir = path.dirname(absPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(absPath, change.before ?? "", "utf-8");
+        console.log(`  ${YELLOW}restored${RESET} ${change.relativePath}`);
+        reverted++;
+      }
+    }
+  } else if (task.source === "claude") {
     const te = task as TaskWithEdits;
 
     // Revert writes (file creations)
@@ -374,7 +421,11 @@ function cmdRollback(selector: string): void {
     const snapshots = readSnapshots(wsRoot);
     const startTs = task.createdAt;
     const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-    const changes = getChangesInWindow(snapshots, startTs, endTs);
+    let changes = getChangesInWindow(snapshots, startTs, endTs);
+    const whitelist = (task as TaskWithEdits).toolEditedFiles;
+    if (whitelist) {
+      changes = changes.filter((c) => whitelist.has(c.relativePath));
+    }
 
     if (changes.length === 0) {
       console.log(`${DIM}No snapshot data to rollback for this prompt.${RESET}`);
@@ -438,7 +489,7 @@ function cmdRollback(selector: string): void {
 
   console.log();
   if (reverted > 0 && conflicts === 0) {
-    console.log(`${GREEN}Selective revert complete — ${reverted} file(s) reverted.${RESET}`);
+    console.log(`${GREEN}${modeLabel} complete — ${reverted} file(s) reverted.${RESET}`);
   } else if (reverted > 0 && conflicts > 0) {
     console.log(`${YELLOW}Partial revert — ${reverted} file(s) reverted, ${conflicts} conflict(s).${RESET}`);
   } else if (conflicts > 0) {
@@ -607,7 +658,8 @@ ${BOLD}Promptrail${RESET} — prompt-level version control for AI code editing
 ${BOLD}Usage:${RESET}
   promptrail timeline [--files]     Show all prompts with file change counts
   promptrail diff <n|text>          Show diff for prompt #n or matching text
-  promptrail rollback <n|text>      Rollback prompt #n's file changes
+  promptrail rollback <n|text>      Cherry revert (undo only this prompt's changes)
+  promptrail rollback <n|text> --hard  Restore files (restore to pre-prompt state)
   promptrail sessions               List all sessions
   promptrail migrate <source-path>   Migrate all sessions from another workspace
   promptrail export [output.json]   Export all sessions to a portable file
@@ -626,7 +678,8 @@ ${BOLD}Examples:${RESET}
   promptrail diff 3                 Diff for prompt #3
   promptrail diff "refactor auth"   Diff for prompt matching text
   promptrail sessions -s claude     Only Claude Code sessions
-  promptrail rollback 5             Rollback prompt #5
+  promptrail rollback 5             Cherry revert prompt #5
+  promptrail rollback 5 --hard      Restore files for prompt #5 (overwrites later changes)
   promptrail migrate ../old-project  Migrate sessions from old workspace
   promptrail export                 Export to promptrail-export.json
   promptrail export my-backup.json  Export to custom file
@@ -658,10 +711,10 @@ switch (command) {
   case "rollback":
   case "rb":
     if (!flags.positional[0]) {
-      console.error(`${RED}Usage: promptrail rollback <prompt-number|text>${RESET}`);
+      console.error(`${RED}Usage: promptrail rollback <prompt-number|text> [--hard]${RESET}`);
       process.exit(1);
     }
-    cmdRollback(flags.positional[0]);
+    cmdRollback(flags.positional[0], flags.hard);
     break;
   case "sessions":
   case "s":
