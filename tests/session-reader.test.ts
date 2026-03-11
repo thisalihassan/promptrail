@@ -130,12 +130,12 @@ describe("SessionReader - Cursor prompt extraction", () => {
     assert.strictEqual(hasSystemReminder, false);
   });
 
-  it("skips prompts shorter than 4 characters", () => {
+  it("never skips user messages (index must match SQLite bubble count)", () => {
     const reader = new SessionReader(tmpDir);
     const tasks = reader.readAllTasks();
     const cursorTasks = tasks.filter((t) => t.source === "cursor");
     const hasOk = cursorTasks.some((t) => t.prompt === "ok");
-    assert.strictEqual(hasOk, false);
+    assert.strictEqual(hasOk, true, "short prompts like 'ok' must be included");
   });
 
   it("task IDs follow cur-<session>-<index> format", () => {

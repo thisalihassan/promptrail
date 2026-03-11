@@ -297,7 +297,7 @@ export class SessionReader {
         const obj = JSON.parse(line);
         if (obj.role === "user") {
           const text = this.extractCursorPrompt(obj.message || {});
-          if (text && text.length >= 4) prompts.push(text);
+          prompts.push(text || "(empty)");
         }
       } catch {
         continue;
@@ -351,10 +351,8 @@ export class SessionReader {
     const perPromptFiles =
       this.cursorHistory.getPerPromptFiles(composerId);
     if (perPromptFiles) {
-      for (const [promptIdx, files] of perPromptFiles) {
-        if (promptIdx < tasks.length) {
-          tasks[promptIdx].toolEditedFiles = files;
-        }
+      for (let i = 0; i < tasks.length; i++) {
+        tasks[i].toolEditedFiles = perPromptFiles.get(i) ?? new Set();
       }
     }
 
