@@ -1,5 +1,5 @@
 export type TaskStatus = "active" | "completed" | "rolled_back";
-export type TaskSource = "claude" | "cursor" | "manual";
+export type TaskSource = "claude" | "cursor" | "vscode" | "manual";
 
 export interface Task {
   id: string;

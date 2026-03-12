@@ -654,6 +654,386 @@ describe("BUG 12: Cursor update resets all bubble timestamps to same value", () 
 	});
 });
 
+// ──────────────────────────────────────────────────────────────
+// BUG 13: Missing bubble timestamps compress all prompts into
+//         a tiny window around the JSONL file mtime.
+//
+// When Cursor prunes bubbleId entries from SQLite (common for
+// long or old sessions), getUserBubbleTimestamps returns all
+// zeros.  The old fallback computed:
+//
+//   fallbackMod - (promptCount - i) * 30_000
+//
+// This crammed a 45-prompt / 20-hour session into 22.5 minutes
+// around the file mtime, leaving ZERO overlap with the file
+// watcher snapshot data.  Every diff and rollback failed.
+//
+// Fix: spread fallback timestamps from session.createdAt to
+// session.lastUpdatedAt so they cover the real time range.
+// ──────────────────────────────────────────────────────────────
+describe("BUG 13: Missing bubble timestamps break all diffs", () => {
+	const SESSION_START = 1773244616266; // 2026-03-11 15:56 UTC
+	const SESSION_END   = 1773318460652; // 2026-03-12 12:27 UTC
+	const PROMPT_COUNT  = 45;
+	const SNAPSHOT_WINDOW = {
+		start: 1773250646272, // 2026-03-11 17:37 UTC
+		end:   1773263589011, // 2026-03-11 21:13 UTC
+	};
+
+	function oldFallback(fileMtime: number, count: number): number[] {
+		const result: number[] = [];
+		for (let i = 0; i < count; i++) {
+			result.push(fileMtime - (count - i) * 30_000);
+		}
+		return result;
+	}
+
+	function newFallback(start: number, end: number, count: number): number[] {
+		const span = Math.max(end - start, count);
+		const result: number[] = [];
+		for (let i = 0; i < count; i++) {
+			result.push(start + (span * i) / Math.max(count - 1, 1));
+		}
+		for (let i = 1; i < result.length; i++) {
+			if (result[i] <= result[i - 1]) result[i] = result[i - 1] + 1;
+		}
+		return result;
+	}
+
+	it("OLD: all timestamps cluster around file mtime, zero overlap with snapshots", () => {
+		const fileMtime = SESSION_END;
+		const ts = oldFallback(fileMtime, PROMPT_COUNT);
+
+		const inSnapshot = ts.filter(
+			(t) => t >= SNAPSHOT_WINDOW.start && t < SNAPSHOT_WINDOW.end
+		);
+		assert.strictEqual(inSnapshot.length, 0,
+			"Old fallback produces ZERO prompts inside the snapshot window (THE BUG)");
+
+		const range = ts[ts.length - 1] - ts[0];
+		assert.ok(range < 25 * 60_000,
+			"Old fallback compresses 20-hour session into < 25 minutes");
+	});
+
+	it("NEW: timestamps spread across session range, many overlap with snapshots", () => {
+		const ts = newFallback(SESSION_START, SESSION_END, PROMPT_COUNT);
+
+		const inSnapshot = ts.filter(
+			(t) => t >= SNAPSHOT_WINDOW.start && t < SNAPSHOT_WINDOW.end
+		);
+		assert.ok(inSnapshot.length >= 5,
+			`Expected >= 5 prompts in snapshot window, got ${inSnapshot.length}`);
+
+		const range = ts[ts.length - 1] - ts[0];
+		assert.ok(range > 15 * 3600_000,
+			"New fallback must span at least 15 hours (actual session is ~20h)");
+	});
+
+	it("NEW: first timestamp equals session start, last equals session end", () => {
+		const ts = newFallback(SESSION_START, SESSION_END, PROMPT_COUNT);
+		assert.strictEqual(ts[0], SESSION_START);
+		assert.strictEqual(ts[ts.length - 1], SESSION_END);
+	});
+
+	it("NEW: single-prompt session doesn't divide by zero", () => {
+		const ts = newFallback(SESSION_START, SESSION_END, 1);
+		assert.strictEqual(ts.length, 1);
+		assert.strictEqual(ts[0], SESSION_START);
+	});
+
+	it("NEW: timestamps are strictly increasing", () => {
+		const ts = newFallback(SESSION_START, SESSION_END, PROMPT_COUNT);
+		for (let i = 1; i < ts.length; i++) {
+			assert.ok(ts[i] > ts[i - 1],
+				`Timestamp ${i} must be > timestamp ${i - 1}`);
+		}
+	});
+
+	it("E2E: snapshot changes found via window matching with new timestamps", () => {
+		const snapshots = [
+			{ relPath: "src/tracker.ts", before: "v1", after: "v2",
+			  timestamp: SNAPSHOT_WINDOW.start + 60_000 },
+			{ relPath: "src/cli.ts", before: "a", after: "b",
+			  timestamp: SNAPSHOT_WINDOW.start + 3600_000 },
+			{ relPath: "README.md", before: "", after: "# Hi",
+			  timestamp: SNAPSHOT_WINDOW.end - 60_000 },
+		];
+
+		const ts = newFallback(SESSION_START, SESSION_END, PROMPT_COUNT);
+
+		let totalFound = 0;
+		for (let i = 0; i < ts.length; i++) {
+			const start = ts[i];
+			const end = i + 1 < ts.length ? ts[i + 1] : Date.now();
+			const found = snapshots.filter(
+				(s) => s.timestamp >= start && s.timestamp < end
+			);
+			totalFound += found.length;
+		}
+
+		assert.strictEqual(totalFound, snapshots.length,
+			"All snapshot changes must be found by exactly one prompt window");
+	});
+
+	it("E2E: same snapshots are LOST with old fallback", () => {
+		const snapshots = [
+			{ relPath: "src/tracker.ts", timestamp: SNAPSHOT_WINDOW.start + 60_000 },
+			{ relPath: "src/cli.ts", timestamp: SNAPSHOT_WINDOW.start + 3600_000 },
+			{ relPath: "README.md", timestamp: SNAPSHOT_WINDOW.end - 60_000 },
+		];
+
+		const ts = oldFallback(SESSION_END, PROMPT_COUNT);
+
+		let totalFound = 0;
+		for (let i = 0; i < ts.length; i++) {
+			const start = ts[i];
+			const end = i + 1 < ts.length ? ts[i + 1] : Date.now();
+			totalFound += snapshots.filter(
+				(s) => s.timestamp >= start && s.timestamp < end
+			).length;
+		}
+
+		assert.strictEqual(totalFound, 0,
+			"Old fallback finds ZERO snapshots (confirming the bug)");
+	});
+});
+
+// ──────────────────────────────────────────────────────────────
+// BUG 14: Cursor auto-injects "Continue" messages in JSONL
+//         that don't exist in SQLite user bubbles.
+//
+// When Cursor's agent process crashes/restarts mid-response,
+// it injects a phantom user message in JSONL. SQLite does NOT
+// include these as type=1 user bubbles.
+//
+// Fix: SQLite-first architecture. SQLite user bubbles are the
+// canonical prompt list -- no auto-continues, no duplicates.
+// JSONL is only used as fallback when SQLite is unavailable.
+// ──────────────────────────────────────────────────────────────
+describe("BUG 14: Auto-continue in JSONL but not SQLite", () => {
+	it("JSONL has more user messages than SQLite has user bubbles", () => {
+		const jsonlUserCount = 21;
+		const sqliteUserCount = 18;
+		assert.ok(jsonlUserCount > sqliteUserCount,
+			"JSONL includes auto-continues and duplicates that SQLite skips");
+	});
+
+	it("SQLite-first avoids auto-continue entirely", () => {
+		const sqliteBubbles = [
+			{ text: "fix the diffs", files: new Set(["session-reader.ts"]) },
+			{ text: "add tests", files: new Set(["test.ts"]) },
+			{ text: "update docs", files: new Set(["readme.md"]) },
+		];
+
+		const tasks = sqliteBubbles.map((b, i) => ({
+			prompt: b.text,
+			toolEditedFiles: b.files,
+			promptIndex: i,
+		}));
+
+		assert.strictEqual(tasks.length, 3, "one task per SQLite bubble");
+		assert.ok(tasks[1].toolEditedFiles.has("test.ts"),
+			"direct attribution, no index shift");
+	});
+
+	it("session-level whitelist filters non-AI files from watcher", () => {
+		const sessionEditedFiles = new Set(["src/app.ts", "tests/app.test.ts"]);
+		const watcherFiles = ["src/app.ts", "package-lock.json", "tests/app.test.ts"];
+
+		const filtered = watcherFiles.filter((f) => sessionEditedFiles.has(f));
+
+		assert.deepStrictEqual(filtered, ["src/app.ts", "tests/app.test.ts"]);
+		assert.ok(!filtered.includes("package-lock.json"), "git pull file excluded");
+	});
+});
+
+// ──────────────────────────────────────────────────────────────
+// BUG 15: JSONL duplicates and index mismatch.
+//
+// JSONL can have duplicate user messages (Cursor re-sends
+// context on reconnect). When using JSONL indices to look up
+// SQLite data, the duplicates shift all subsequent indices.
+//
+// Fix: SQLite-first architecture bypasses JSONL entirely for
+// prompt discovery. Each SQLite user bubble has a clean index.
+// ──────────────────────────────────────────────────────────────
+describe("BUG 15: SQLite-first eliminates index mismatch", () => {
+	it("SQLite user bubble index is stable (no duplicates)", () => {
+		const sqliteBubbleTexts = [
+			"fix diffs", "add tests", "update docs", "refactor",
+		];
+
+		const perPromptFiles = new Map<number, Set<string>>();
+		perPromptFiles.set(0, new Set(["session-reader.ts"]));
+		perPromptFiles.set(1, new Set(["test.ts"]));
+		perPromptFiles.set(2, new Set(["readme.md"]));
+		perPromptFiles.set(3, new Set(["utils.ts"]));
+
+		const tasks = sqliteBubbleTexts.map((text, i) => ({
+			prompt: text,
+			promptIndex: i,
+			toolEditedFiles: perPromptFiles.get(i) ?? new Set<string>(),
+		}));
+
+		assert.ok(tasks[0].toolEditedFiles.has("session-reader.ts"));
+		assert.ok(tasks[1].toolEditedFiles.has("test.ts"));
+		assert.ok(tasks[2].toolEditedFiles.has("readme.md"));
+		assert.ok(tasks[3].toolEditedFiles.has("utils.ts"));
+	});
+
+	it("JSONL fallback still works when SQLite is unavailable", () => {
+		const jsonlPrompts = ["fix diffs", "add tests"];
+		const tasks = jsonlPrompts.map((text, i) => ({
+			prompt: text,
+			promptIndex: i,
+		}));
+		assert.strictEqual(tasks.length, 2);
+	});
+
+	it("E2E: SQLite-first pipeline with watcher fallback", () => {
+		const sqliteBubbles = [
+			{ text: "fix the bug", createdAt: 1000, files: new Set(["session-reader.ts", "vscode-history.ts"]) },
+			{ text: "add tests", createdAt: 2000, files: new Set(["regressions.test.ts", "integration.test.ts"]) },
+			{ text: "update docs", createdAt: 3000, files: new Set<string>() },
+		];
+
+		const sessionFiles = new Set(["session-reader.ts", "vscode-history.ts", "regressions.test.ts", "integration.test.ts"]);
+
+		const tasks = sqliteBubbles.map((b, i) => ({
+			prompt: b.text,
+			createdAt: b.createdAt,
+			promptIndex: i,
+			toolEditedFiles: b.files.size > 0 ? b.files : undefined,
+			sessionEditedFiles: sessionFiles,
+			filesChanged: [] as string[],
+		}));
+
+		// Simulate watcher data in time windows
+		const watcherChanges = [
+			{ relPath: "session-reader.ts", timestamp: 1500 },
+			{ relPath: "package-lock.json", timestamp: 1600 },
+			{ relPath: "integration.test.ts", timestamp: 2500 },
+		];
+
+		for (let i = 0; i < tasks.length; i++) {
+			const startTs = tasks[i].createdAt;
+			const endTs = i + 1 < tasks.length ? tasks[i + 1].createdAt : Infinity;
+			const inWindow = watcherChanges.filter(c => c.timestamp >= startTs && c.timestamp < endTs);
+
+			if (inWindow.length > 0) {
+				const perPrompt = tasks[i].toolEditedFiles;
+				const session = tasks[i].sessionEditedFiles;
+				const whitelist = perPrompt && perPrompt.size > 0 ? perPrompt : session;
+				const filtered = inWindow
+					.map(c => c.relPath)
+					.filter(f => !whitelist || whitelist.has(f));
+				tasks[i].filesChanged = filtered;
+			}
+
+			if (tasks[i].filesChanged.length === 0 && tasks[i].toolEditedFiles && tasks[i].toolEditedFiles!.size > 0) {
+				tasks[i].filesChanged = [...tasks[i].toolEditedFiles!];
+			}
+		}
+
+		assert.deepStrictEqual(tasks[0].filesChanged, ["session-reader.ts"],
+			"watcher finds session-reader.ts, toolEditedFiles filters out package-lock.json");
+		assert.deepStrictEqual(tasks[1].filesChanged, ["integration.test.ts"],
+			"watcher finds integration.test.ts in window");
+		assert.deepStrictEqual(tasks[2].filesChanged, [],
+			"no files for informational prompt");
+	});
+
+	it("home-directory paths normalized correctly", () => {
+		const wsRoot = "/Users/test/Work/project";
+		const home = "/Users/test";
+
+		function toRel(fp: string): string {
+			if (fp.startsWith(wsRoot + "/")) return fp.slice(wsRoot.length + 1);
+			if (fp.startsWith(home + "/")) return fp.slice(home.length + 1);
+			return fp;
+		}
+
+		assert.strictEqual(
+			toRel("/Users/test/Work/project/src/app.ts"),
+			"src/app.ts",
+			"workspace-relative path"
+		);
+		assert.strictEqual(
+			toRel("/Users/test/.cursor/plans/fix.plan.md"),
+			".cursor/plans/fix.plan.md",
+			"home-relative path for plan files"
+		);
+		assert.strictEqual(
+			toRel("/other/path/file.ts"),
+			"/other/path/file.ts",
+			"absolute path preserved when outside both"
+		);
+	});
+});
+
+// ──────────────────────────────────────────────────────────────
+// BUG 16: Cursor bubble types and capabilityType.
+//
+// SQLite bubbles have type=1 (user) and type=2 (assistant).
+// capabilityType=30 on assistant bubbles represents user
+// interactions (answers to questions, button clicks) but these
+// have EMPTY text -- the actual answer is not recoverable.
+// capabilityType=15 on assistant bubbles represents tool calls.
+//
+// Known: auto-continues are in JSONL but NOT in SQLite bubbles.
+// Known: user answers (AskQuestion responses) are cap=30 with
+//        empty text -- untraceable as separate prompts.
+// Known: "Build" button clicks appear as separate user bubbles
+//        with "Implement the plan..." text in SQLite.
+// ──────────────────────────────────────────────────────────────
+describe("BUG 16: Cursor bubble types and interaction model", () => {
+	it("only type=1 bubbles are user prompts in SQLite", () => {
+		const bubbles = [
+			{ type: 1, text: "fix diffs" },
+			{ type: 2, text: "", capabilityType: 15 },
+			{ type: 2, text: "", capabilityType: 30 },
+			{ type: 1, text: "add tests" },
+			{ type: 2, text: "", capabilityType: 15 },
+		];
+
+		const userBubbles = bubbles.filter(b => b.type === 1);
+		assert.strictEqual(userBubbles.length, 2);
+		assert.strictEqual(userBubbles[0].text, "fix diffs");
+		assert.strictEqual(userBubbles[1].text, "add tests");
+	});
+
+	it("capabilityType=30 are user interactions with empty text", () => {
+		const cap30Bubble = { type: 2, text: "", capabilityType: 30 };
+		assert.strictEqual(cap30Bubble.text, "",
+			"cap=30 bubbles have empty text -- answer content is lost");
+		assert.strictEqual(cap30Bubble.type, 2,
+			"cap=30 are type 2 (assistant), not type 1 (user)");
+	});
+
+	it("toolFormerData with FILE_EDIT_TOOLS tracks per-prompt files", () => {
+		const FILE_EDIT_TOOLS = new Set([
+			"edit_file_v2", "write", "delete_file", "apply_patch",
+		]);
+
+		const toolCalls = [
+			{ name: "edit_file_v2", file: "app.ts" },
+			{ name: "run_terminal_command_v2", file: "" },
+			{ name: "read_file_v2", file: "" },
+			{ name: "write", file: "new.ts" },
+			{ name: "ask_question", file: "" },
+			{ name: "create_plan", file: "" },
+		];
+
+		const editedFiles = toolCalls
+			.filter(tc => FILE_EDIT_TOOLS.has(tc.name) && tc.file)
+			.map(tc => tc.file);
+
+		assert.deepStrictEqual(editedFiles, ["app.ts", "new.ts"]);
+		assert.ok(!editedFiles.includes(""),
+			"non-file tools excluded");
+	});
+});
+
 describe("BUG 11: getTasks shows files but getTaskChangeset returns empty", () => {
 	it("Claude windows expanding between calls can exclude previously-found changes", () => {
 		const fileChange = { relPath: "README.md", before: "old", after: "new", timestamp: 500 };

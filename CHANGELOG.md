@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-12
+
+### Added
+- **SQLite-first architecture** for Cursor sessions — uses SQLite user bubbles as the canonical prompt list instead of JSONL, eliminating duplicate entries, auto-continue noise, and index alignment issues
+- **Shadow DB** (`.promptrail/promptrail.db`) — caches Cursor's bubble data (text, timestamps, per-prompt files, tool calls) on first read. Survives Cursor pruning, timestamp collapse, and session restarts. Append-only incremental sync.
+- **Home-directory path normalization** — files outside the workspace (e.g. `~/.cursor/plans/`) now display as home-relative paths instead of absolute paths
+- 162 tests (up from 102), including regression tests for 16 specific bugs discovered in Cursor's data model
+
+### Fixed
+- Cursor sessions with pruned bubble data (500+ bubbles) now fall through to JSONL parsing instead of showing empty prompts
+- Cursor sessions with collapsed timestamps (all bubbles same `createdAt`) detected and spread across session range
+- Per-prompt file attribution accuracy improved from ~17% to ~88% against verified ground truth
+- Timeline no longer shows duplicate prompts from JSONL re-sends
+- Timeline no longer shows phantom "auto-continue" prompts injected by Cursor's agent restart mechanism
+- `toolEditedFiles` whitelist now correctly falls back to showing files from SQLite when file watcher has no matching data in the time window
+- Plan files (`.cursor/plans/`) now tracked with correct relative paths
+
 ## [0.5.2] - 2026-03-11
 
 ### Fixed
@@ -84,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/thisalihassan/promptrail/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/thisalihassan/promptrail/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/thisalihassan/promptrail/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/thisalihassan/promptrail/compare/v0.4.3...v0.5.0

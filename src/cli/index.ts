@@ -46,7 +46,7 @@ function getWorkspaceRoot(): string {
 }
 
 interface Flags {
-  source?: string;  // "claude" | "cursor"
+  source?: string;  // "claude" | "cursor" | "vscode"
   model?: string;   // substring match against task.model
   files?: boolean;
   hard?: boolean;
@@ -98,11 +98,18 @@ function readSnapshots(
 function getChangesInWindow(
   snapshots: ReturnType<typeof readSnapshots>,
   startTs: number,
-  endTs: number
+  endTs: number,
+  excludeWindows?: Array<{ start: number; end: number }>
 ): FileChange[] {
-  const inWindow = snapshots.filter(
-    (c) => c.timestamp >= startTs && c.timestamp < endTs
-  );
+  const inWindow = snapshots.filter((c) => {
+    if (c.timestamp < startTs || c.timestamp >= endTs) return false;
+    if (excludeWindows) {
+      for (const w of excludeWindows) {
+        if (c.timestamp >= w.start && c.timestamp < w.end) return false;
+      }
+    }
+    return true;
+  });
 
   const merged = new Map<string, { before: string; after: string }>();
   for (const c of inWindow) {
@@ -145,17 +152,23 @@ function cmdTimeline(flags: Flags): void {
     const t = sorted[i];
     const chronIdx = chronological.indexOf(t);
     const src = t.source || "unknown";
-    const srcLabel = src === "cursor" ? `${BLUE}cursor${RESET}` : src === "claude" ? `${MAGENTA}claude${RESET}` : `${DIM}${src}${RESET}`;
+    const srcLabel = src === "cursor" ? `${BLUE}cursor${RESET}` : src === "claude" ? `${MAGENTA}claude${RESET}` : src === "vscode" ? `${GREEN}vscode${RESET}` : `${DIM}${src}${RESET}`;
 
     let files = t.filesChanged;
     if (t.source === "cursor" && snapshots.length > 0) {
+      const te = t as TaskWithEdits;
+      const perPrompt = te.toolEditedFiles;
+      const session = te.sessionEditedFiles;
       const startTs = t.createdAt;
       const endTs = chronIdx + 1 < chronological.length ? chronological[chronIdx + 1].createdAt : Date.now();
       const changes = getChangesInWindow(snapshots, startTs, endTs);
       if (changes.length > 0) {
-        const whitelist = (t as TaskWithEdits).toolEditedFiles;
+        const whitelist = perPrompt && perPrompt.size > 0 ? perPrompt : session;
         const relPaths = changes.map((c) => c.relativePath);
-        files = whitelist ? relPaths.filter((f) => whitelist.has(f)) : relPaths;
+        files = whitelist && whitelist.size > 0 ? relPaths.filter((f) => whitelist.has(f)) : relPaths;
+      }
+      if (files.length === 0 && perPrompt && perPrompt.size > 0) {
+        files = [...perPrompt];
       }
     }
 
@@ -198,14 +211,24 @@ function cmdDiff(selector: string, flags: Flags = { positional: [] }): void {
 
   if (task.source === "cursor") {
     const snapshots = readSnapshots(wsRoot);
+    const allSorted = [...tasks].sort((a, b) => a.createdAt - b.createdAt);
+    const scWindows: Array<{ start: number; end: number }> = [];
+    for (let si = 0; si < allSorted.length; si++) {
+      const s = allSorted[si].source;
+      if (s !== "claude" && s !== "vscode") continue;
+      scWindows.push({
+        start: allSorted[si].createdAt,
+        end: si + 1 < allSorted.length ? allSorted[si + 1].createdAt : Date.now(),
+      });
+    }
     const startTs = task.createdAt;
     const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-    changes = getChangesInWindow(snapshots, startTs, endTs);
+    changes = getChangesInWindow(snapshots, startTs, endTs, scWindows);
     const whitelist = (task as TaskWithEdits).toolEditedFiles;
     if (whitelist) {
       changes = changes.filter((c) => whitelist.has(c.relativePath));
     }
-  } else if (task.source === "claude") {
+  } else if (task.source === "claude" || task.source === "vscode") {
     const te = task as TaskWithEdits;
     if (te.edits) {
       for (const edit of te.edits) {
@@ -364,7 +387,7 @@ function cmdRollback(selector: string, hard = false): void {
         reverted++;
       }
     }
-  } else if (task.source === "claude") {
+  } else if (task.source === "claude" || task.source === "vscode") {
     const te = task as TaskWithEdits;
 
     // Revert writes (file creations)
@@ -524,7 +547,7 @@ function cmdSessions(flags: Flags): void {
 
   console.log(`${BOLD}Sessions:${RESET}\n`);
   for (const [id, info] of sessions) {
-    const color = info.source === "cursor" ? BLUE : MAGENTA;
+    const color = info.source === "cursor" ? BLUE : info.source === "vscode" ? GREEN : MAGENTA;
     const model = info.model ? `${DIM}[${info.model.replace("claude-", "").replace("-thinking", "")}]${RESET}` : "";
     console.log(`  ${color}${info.source}${RESET}  ${id.slice(0, 8)}  ${info.count} prompts  ${DIM}${timeAgo(info.latest)}${RESET} ${model}`);
   }

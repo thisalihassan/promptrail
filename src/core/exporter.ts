@@ -4,7 +4,7 @@ import * as os from "os";
 
 interface ExportOptions {
   sessionId: string;
-  source: "cursor" | "claude";
+  source: "cursor" | "claude" | "vscode";
   workspaceRoot: string;
   outputPath: string;
 }
@@ -12,10 +12,10 @@ interface ExportOptions {
 export class ConversationExporter {
   static findAllSessions(
     workspaceRoot: string
-  ): { id: string; source: "cursor" | "claude"; label: string; path: string }[] {
+  ): { id: string; source: "cursor" | "claude" | "vscode"; label: string; path: string }[] {
     const sessions: {
       id: string;
-      source: "cursor" | "claude";
+      source: "cursor" | "claude" | "vscode";
       label: string;
       path: string;
     }[] = [];
@@ -53,6 +53,21 @@ export class ConversationExporter {
       }
     }
 
+    const vscodeDir = this.findVSCodeChatDir(workspaceRoot);
+    if (vscodeDir) {
+      for (const file of fs.readdirSync(vscodeDir)) {
+        if (!file.endsWith(".jsonl")) continue;
+        const jsonl = path.join(vscodeDir, file);
+        const id = file.replace(".jsonl", "");
+        sessions.push({
+          id,
+          source: "vscode",
+          label: `VS Code ${id.slice(0, 8)}`,
+          path: jsonl,
+        });
+      }
+    }
+
     return sessions;
   }
 
@@ -64,19 +79,22 @@ export class ConversationExporter {
 
   static convertSessionToMarkdown(
     jsonlPath: string,
-    source: "cursor" | "claude"
+    source: "cursor" | "claude" | "vscode"
   ): string {
     const raw = fs.readFileSync(jsonlPath, "utf-8");
     const lines = raw.split("\n").filter((l) => l.trim());
     const parts: string[] = [];
 
+    const sourceLabel = source === "cursor" ? "Cursor" : source === "claude" ? "Claude Code" : "VS Code Chat";
     parts.push("# Exported Conversation\n");
-    parts.push(`> Source: ${source === "cursor" ? "Cursor" : "Claude Code"}`);
+    parts.push(`> Source: ${sourceLabel}`);
     parts.push(`> Exported: ${new Date().toISOString()}\n`);
     parts.push("---\n");
 
     if (source === "cursor") {
       return parts.join("\n") + "\n" + this.parseCursorToMd(lines);
+    } else if (source === "vscode") {
+      return parts.join("\n") + "\n" + this.parseVSCodeToMd(lines);
     } else {
       return parts.join("\n") + "\n" + this.parseClaudeToMd(lines);
     }
@@ -221,7 +239,7 @@ export class ConversationExporter {
 
   private static peekFirstPrompt(
     jsonlPath: string,
-    source: "cursor" | "claude"
+    source: "cursor" | "claude" | "vscode"
   ): string {
     try {
       const raw = fs.readFileSync(jsonlPath, "utf-8");
@@ -256,7 +274,7 @@ export class ConversationExporter {
   }
 
   private static convertToMarkdown(
-    source: "cursor" | "claude",
+    source: "cursor" | "claude" | "vscode",
     sessionId: string,
     jsonlPath: string
   ): string {
@@ -283,5 +301,110 @@ export class ConversationExporter {
       if (fs.existsSync(dir)) return dir;
     }
     return undefined;
+  }
+
+  private static getVSCodeUserDir(): string {
+    switch (process.platform) {
+      case "win32":
+        return path.join(
+          process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"),
+          "Code",
+          "User"
+        );
+      case "linux":
+        return path.join(
+          process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
+          "Code",
+          "User"
+        );
+      default:
+        return path.join(
+          os.homedir(),
+          "Library",
+          "Application Support",
+          "Code",
+          "User"
+        );
+    }
+  }
+
+  private static findVSCodeChatDir(workspaceRoot: string): string | undefined {
+    const storageBase = path.join(this.getVSCodeUserDir(), "workspaceStorage");
+    if (!fs.existsSync(storageBase)) return undefined;
+
+    const folderUri = process.platform === "win32"
+      ? `file:///${workspaceRoot.replace(/\\/g, "/")}`
+      : `file://${workspaceRoot}`;
+    for (const entry of fs.readdirSync(storageBase)) {
+      const wsJson = path.join(storageBase, entry, "workspace.json");
+      try {
+        const data = JSON.parse(fs.readFileSync(wsJson, "utf-8"));
+        const folder: string = data.folder || "";
+        if (folder === folderUri || decodeURIComponent(folder) === folderUri) {
+          const chatDir = path.join(storageBase, entry, "chatSessions");
+          if (fs.existsSync(chatDir)) return chatDir;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  private static parseVSCodeToMd(lines: string[]): string {
+    // VS Code JSONL uses a replay format (kind=0/1/2 operations)
+    // For export, we do a best-effort extraction of user/assistant text
+    const parts: string[] = [];
+
+    for (const line of lines) {
+      let obj: any;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      // kind=1 SET or kind=2 ARRAY_REPLACE may contain request data
+      if (obj.kind === 1 || obj.kind === 2) {
+        const k = obj.k;
+        const v = obj.v;
+        if (!Array.isArray(k) || v === undefined) continue;
+
+        // Look for request message text: k = ['requests', N, 'message', 'text']
+        if (
+          k.length === 4 &&
+          k[0] === "requests" &&
+          k[2] === "message" &&
+          k[3] === "text" &&
+          typeof v === "string" &&
+          v.length > 3
+        ) {
+          parts.push(`## User\n\n${v}\n`);
+        }
+
+        // Look for response content in ARRAY_REPLACE: k = ['requests', N, 'response']
+        if (
+          k.length === 3 &&
+          k[0] === "requests" &&
+          k[2] === "response" &&
+          Array.isArray(v)
+        ) {
+          const textParts: string[] = [];
+          for (const item of v) {
+            if (item?.value?.value) {
+              textParts.push(item.value.value);
+            }
+          }
+          if (textParts.length > 0) {
+            const text = textParts.join("\n\n");
+            if (text.length > 3) {
+              parts.push(`## Assistant\n\n${text}\n`);
+            }
+          }
+        }
+      }
+    }
+
+    return parts.join("\n---\n\n");
   }
 }

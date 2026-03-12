@@ -10,6 +10,8 @@
 - **Restore Files** — hard reset files to their pre-prompt state for Cursor sessions
 - **Dual rollback modes** — user chooses Cherry Revert or Restore Files in extension UI and CLI (`--hard`)
 - **Per-prompt file attribution** — uses Cursor SQLite `toolFormerData` to filter out `git pull` and manual edits from the file watcher
+- **SQLite-first Cursor parsing** — uses SQLite user bubbles as canonical prompt list, eliminating JSONL noise (duplicates, auto-continues)
+- **Shadow DB** — `.promptrail/promptrail.db` caches Cursor bubble data before it gets pruned or collapsed
 - **CHANGELOG** — marketplace-ready changelog
 
 ## Planned

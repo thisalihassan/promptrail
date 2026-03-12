@@ -3,6 +3,8 @@ import * as path from "path";
 import * as os from "os";
 import type { Task } from "../models/types";
 import { CursorHistory } from "./cursor-history";
+import { VSCodeHistory } from "./vscode-history";
+import { PromptRailDB } from "./promptrail-db";
 
 export interface EditRecord {
   file: string;
@@ -21,17 +23,23 @@ export interface TaskWithEdits extends Task {
   promptIndex?: number;
   /** Files the AI actually edited per toolFormerData (Cursor only). Used as whitelist. */
   toolEditedFiles?: Set<string>;
+  /** All files the AI touched in this session (from originalFileStates + newlyCreatedFiles). */
+  sessionEditedFiles?: Set<string>;
 }
 
 export class SessionReader {
   private workspaceRoot: string;
   private cursorHistory: CursorHistory;
+  private vscodeHistory: VSCodeHistory;
+  private promptrailDb: PromptRailDB;
   private cachedTasks: TaskWithEdits[] = [];
   private lastReadAt = 0;
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
-    this.cursorHistory = new CursorHistory(workspaceRoot);
+    this.promptrailDb = new PromptRailDB(workspaceRoot);
+    this.cursorHistory = new CursorHistory(workspaceRoot, this.promptrailDb);
+    this.vscodeHistory = new VSCodeHistory(workspaceRoot);
   }
 
   readAllTasks(): TaskWithEdits[] {
@@ -43,8 +51,9 @@ export class SessionReader {
 
     const claudeTasks = this.readClaudeSessions();
     const cursorTasks = this.readCursorSessions();
+    const vscodeTasks = this.readVSCodeSessions();
 
-    this.cachedTasks = [...claudeTasks, ...cursorTasks].sort(
+    this.cachedTasks = [...claudeTasks, ...cursorTasks, ...vscodeTasks].sort(
       (a, b) => b.createdAt - a.createdAt
     );
     return this.cachedTasks;
@@ -52,6 +61,10 @@ export class SessionReader {
 
   getCursorHistory(): CursorHistory {
     return this.cursorHistory;
+  }
+
+  getVSCodeHistory(): VSCodeHistory {
+    return this.vscodeHistory;
   }
 
   private toRelPath(absPath: string): string {
@@ -255,19 +268,37 @@ export class SessionReader {
    * When multiple consecutive prompts share the exact same timestamp
    * (happens after Cursor updates or session migration), spread them
    * out so each prompt gets a nonzero time window for file matching.
+   *
+   * fallbackStart/fallbackEnd define the session time range used when
+   * bubble timestamps are missing from SQLite (Cursor prunes them for
+   * long or old sessions).
    */
   private deduplicateTimestamps(
     raw: number[] | undefined,
     promptCount: number,
-    fallbackMod: number
+    fallbackStart: number,
+    fallbackEnd: number
   ): number[] {
+    // Detect collapsed timestamps: if all non-zero raw values are identical
+    // (Cursor resets them on session switch/restart), treat as missing.
+    let useRaw = raw && raw.length > 0;
+    if (useRaw) {
+      const nonZero = raw!.filter((t) => t > 0);
+      if (nonZero.length > 1) {
+        const allSame = nonZero.every((t) => t === nonZero[0]);
+        if (allSame) useRaw = false;
+      }
+    }
+
     const result: number[] = [];
+    const span = Math.max(fallbackEnd - fallbackStart, promptCount);
 
     for (let i = 0; i < promptCount; i++) {
       const ts =
-        raw && raw[i] && raw[i] > 0
-          ? raw[i]
-          : fallbackMod - (promptCount - i) * 30_000;
+        useRaw && raw![i] && raw![i] > 0
+          ? raw![i]
+          : fallbackStart +
+            (span * i) / Math.max(promptCount - 1, 1);
       result.push(ts);
     }
 
@@ -281,6 +312,87 @@ export class SessionReader {
   }
 
   private parseCursorSession(
+    filePath: string,
+    composerId: string,
+    session: ReturnType<CursorHistory["getComposerSession"]>
+  ): TaskWithEdits[] {
+    // SQLite-first: user bubbles are the canonical prompt list.
+    // They have no duplicates, no auto-continues, and correct
+    // per-prompt file attribution via toolFormerData.
+    const bubbleData = this.cursorHistory.getUserBubbleData(composerId);
+
+    // Only use SQLite-first if bubble data is usable (has text).
+    // Pruned sessions return empty-text bubbles from composerData
+    // headers -- fall through to JSONL for those.
+    const hasUsableText = bubbleData
+      && bubbleData.length > 0
+      && bubbleData.some((b) => b.text.length > 0);
+
+    if (hasUsableText) {
+      return this.parseCursorFromSQLite(
+        composerId, session, bubbleData!
+      );
+    }
+
+    // Fallback: JSONL-based parsing when SQLite data is unavailable
+    // (session not yet in SQLite, or bubble data pruned).
+    return this.parseCursorFromJSONL(filePath, composerId, session);
+  }
+
+  private parseCursorFromSQLite(
+    composerId: string,
+    session: ReturnType<CursorHistory["getComposerSession"]>,
+    bubbleData: Array<{ text: string; createdAt: number; files: Set<string> }>
+  ): TaskWithEdits[] {
+    const tasks: TaskWithEdits[] = [];
+
+    const sessionFileSet = new Set<string>();
+    for (const fi of session?.filesChanged || []) {
+      sessionFileSet.add(fi.relativePath);
+    }
+
+    for (let i = 0; i < bubbleData.length; i++) {
+      const b = bubbleData[i];
+      tasks.push({
+        id: `cur-${composerId.slice(0, 8)}-${i}`,
+        prompt: (b.text || "(empty)").slice(0, 500),
+        createdAt: b.createdAt || 0,
+        status: i < bubbleData.length - 1 ? "completed" : "active",
+        filesChanged: [],
+        source: "cursor",
+        sessionId: composerId,
+        promptIndex: i,
+        model: session?.model,
+        mode: session?.mode,
+        toolEditedFiles: b.files.size > 0 ? b.files : undefined,
+        sessionEditedFiles: sessionFileSet,
+      });
+    }
+
+    if (tasks.length === 0) return tasks;
+
+    // File attribution via firstEditBubbleId for initial file list
+    const bubbleMapping =
+      this.cursorHistory.getFilePromptMapping(composerId);
+    if (bubbleMapping) {
+      for (const fi of session?.filesChanged || []) {
+        const promptIdx = bubbleMapping.get(fi.relativePath);
+        if (promptIdx !== undefined && promptIdx < tasks.length) {
+          if (!tasks[promptIdx].filesChanged.includes(fi.relativePath)) {
+            tasks[promptIdx].filesChanged.push(fi.relativePath);
+          }
+        }
+      }
+    }
+
+    if (session && session.lastUpdatedAt > 0) {
+      tasks[tasks.length - 1].completedAt = session.lastUpdatedAt;
+    }
+
+    return tasks;
+  }
+
+  private parseCursorFromJSONL(
     filePath: string,
     composerId: string,
     session: ReturnType<CursorHistory["getComposerSession"]>
@@ -308,13 +420,24 @@ export class SessionReader {
       this.cursorHistory.getUserBubbleTimestamps(composerId);
 
     const stat = fs.statSync(filePath);
-    const fallbackMod = stat.mtimeMs;
+    const fallbackEnd = session?.lastUpdatedAt && session.lastUpdatedAt > 0
+      ? session.lastUpdatedAt
+      : stat.mtimeMs;
+    const fallbackStart = session?.createdAt && session.createdAt > 0
+      ? session.createdAt
+      : fallbackEnd - prompts.length * 30_000;
 
     const realTimestamps = this.deduplicateTimestamps(
       rawTimestamps,
       prompts.length,
-      fallbackMod
+      fallbackStart,
+      fallbackEnd
     );
+
+    const sessionFileSet = new Set<string>();
+    for (const fi of session?.filesChanged || []) {
+      sessionFileSet.add(fi.relativePath);
+    }
 
     for (let i = 0; i < prompts.length; i++) {
       if (cur) {
@@ -322,12 +445,10 @@ export class SessionReader {
         tasks.push(cur);
       }
 
-      const ts = realTimestamps[i];
-
       cur = {
         id: `cur-${composerId.slice(0, 8)}-${taskIdx++}`,
         prompt: prompts[i].slice(0, 500),
-        createdAt: ts,
+        createdAt: realTimestamps[i],
         status: "active",
         filesChanged: [],
         source: "cursor",
@@ -335,6 +456,7 @@ export class SessionReader {
         promptIndex: i,
         model: session?.model,
         mode: session?.mode,
+        sessionEditedFiles: sessionFileSet,
       };
     }
 
@@ -345,9 +467,6 @@ export class SessionReader {
 
     if (tasks.length === 0) return tasks;
 
-    // Per-prompt file whitelist from toolFormerData (ground truth from SQLite).
-    // This tells us exactly which files the AI edited per prompt,
-    // filtering out git pull / manual user edits that the watcher picks up.
     const perPromptFiles =
       this.cursorHistory.getPerPromptFiles(composerId);
     if (perPromptFiles) {
@@ -356,16 +475,12 @@ export class SessionReader {
       }
     }
 
-    // File attribution via SQLite bubble mapping (for initial first-edit info).
-    // The file watcher will override filesChanged with real-time data for
-    // prompts that happened while the extension was active.
+    const bubbleMapping =
+      this.cursorHistory.getFilePromptMapping(composerId);
     const sessionFiles = session?.filesChanged || [];
-    if (sessionFiles.length > 0) {
-      const bubbleMapping =
-        this.cursorHistory.getFilePromptMapping(composerId);
-
+    if (sessionFiles.length > 0 && bubbleMapping) {
       for (const fileInfo of sessionFiles) {
-        const promptIdx = bubbleMapping?.get(fileInfo.relativePath);
+        const promptIdx = bubbleMapping.get(fileInfo.relativePath);
         const target =
           promptIdx !== undefined && promptIdx < tasks.length
             ? tasks[promptIdx]
@@ -420,5 +535,83 @@ export class SessionReader {
     if (cleaned.length > 5) return cleaned.slice(0, 300);
 
     return "";
+  }
+
+  // ── VS Code Chat ─────────────────────────────────────────
+
+  private readVSCodeSessions(): TaskWithEdits[] {
+    const sessions = this.vscodeHistory.readAllSessions();
+    if (sessions.length === 0) return [];
+
+    const tasks: TaskWithEdits[] = [];
+
+    for (const session of sessions) {
+      const editingOps = this.vscodeHistory.getEditingOps(session.sessionId);
+
+      for (let i = 0; i < session.requests.length; i++) {
+        const req = session.requests[i];
+        if (!req.messageText || req.messageText.length < 2) continue;
+
+        // Get files from editing ops (ground truth) + response tool invocations
+        const filesChanged = new Set<string>();
+
+        // Primary: chatEditingSessions state.json per-request ops
+        if (editingOps) {
+          const reqFiles = editingOps.get(req.requestId);
+          if (reqFiles) {
+            for (const f of reqFiles) {
+              if (f) filesChanged.add(f);
+            }
+          }
+        }
+
+        // Secondary: tool invocations from JSONL response
+        for (const f of req.filesEdited) {
+          if (f) filesChanged.add(f);
+        }
+
+        // Get diff data from chatEditingSessions snapshot replay
+        const diffs = this.vscodeHistory.getDiffsForRequest(
+          session.sessionId,
+          req.requestId
+        );
+
+        const edits: EditRecord[] = [];
+        const writes: WriteRecord[] = [];
+
+        if (diffs) {
+          for (const diff of diffs) {
+            if (diff.type === "added") {
+              writes.push({ file: diff.relativePath, content: diff.after });
+            } else if (diff.type === "modified") {
+              edits.push({
+                file: diff.relativePath,
+                oldString: diff.before,
+                newString: diff.after,
+              });
+            }
+            // For "deleted", we don't populate edits/writes
+            // since there's no content to show
+          }
+        }
+
+        tasks.push({
+          id: `vsc-${session.sessionId.slice(0, 8)}-${i}`,
+          prompt: req.messageText.slice(0, 500),
+          createdAt: req.timestamp || session.creationDate,
+          status: "completed",
+          filesChanged: [...filesChanged],
+          source: "vscode",
+          sessionId: session.sessionId,
+          model: session.model,
+          mode: session.mode,
+          promptIndex: i,
+          edits: edits.length > 0 ? edits : undefined,
+          writes: writes.length > 0 ? writes : undefined,
+        });
+      }
+    }
+
+    return tasks;
   }
 }
