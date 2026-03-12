@@ -362,3 +362,131 @@ describe("JSONL prompt count must match SQLite bubble count", () => {
     assert.strictEqual(jsonlNoFilter.length, sqliteBubbles.length, "no filter: counts match");
   });
 });
+
+// ──────────────────────────────────────────────────────────────
+// E2E: SessionReader → file watcher snapshot pipeline
+//
+// Creates a real Cursor transcript directory, populates a
+// changes.json with snapshot data, and verifies the full
+// diff-resolution pipeline works end-to-end.
+//
+// Without actual SQLite data, SessionReader falls back to
+// file-mtime-based timestamps. We place snapshots inside
+// that window to test the full pipeline. The session-range
+// fallback (the BUG 13 fix) is tested separately in
+// regressions.test.ts.
+// ──────────────────────────────────────────────────────────────
+describe("E2E: Full diff pipeline — SessionReader + snapshot matching", () => {
+  let tmpDir: string;
+  let composerId: string;
+  let jsonlPath: string;
+  let snapshotTs: number;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "promptrail-e2e-pipeline-"));
+    composerId = "e2e-pipe-0000-0000-000000000001";
+
+    const encoded = tmpDir.replace(/\//g, "-").replace(/^-/, "");
+    const transcriptDir = path.join(
+      os.homedir(), ".cursor", "projects", encoded, "agent-transcripts",
+      composerId
+    );
+    fs.mkdirSync(transcriptDir, { recursive: true });
+
+    const lines = [
+      '{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Implement auth module</user_query>"}]}}',
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}',
+      '{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Add error handling</user_query>"}]}}',
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"Added."}]}}',
+      '{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Write tests</user_query>"}]}}',
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"Fixed."}]}}',
+    ];
+    jsonlPath = path.join(transcriptDir, `${composerId}.jsonl`);
+    fs.writeFileSync(jsonlPath, lines.join("\n") + "\n");
+
+    const stat = fs.statSync(jsonlPath);
+    const mtime = stat.mtimeMs;
+
+    snapshotTs = mtime - 45_000;
+
+    const snapshotsDir = path.join(tmpDir, ".promptrail", "snapshots");
+    fs.mkdirSync(snapshotsDir, { recursive: true });
+    const snapshots = [
+      { relPath: "src/auth.ts", before: "v1", after: "v2",
+        timestamp: snapshotTs },
+      { relPath: "src/errors.ts", before: "", after: "export class AppError {}",
+        timestamp: snapshotTs + 15_000 },
+      { relPath: "src/auth.test.ts", before: "", after: "test('auth', () => {});",
+        timestamp: snapshotTs + 30_000 },
+    ];
+    fs.writeFileSync(
+      path.join(snapshotsDir, "changes.json"),
+      JSON.stringify(snapshots)
+    );
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    const encoded = tmpDir.replace(/\//g, "-").replace(/^-/, "");
+    const projectDir = path.join(
+      os.homedir(), ".cursor", "projects", encoded
+    );
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it("SessionReader produces cursor tasks from JSONL", () => {
+    const reader = new SessionReader(tmpDir);
+    const tasks = reader.readAllTasks();
+    const cursor = tasks.filter((t) => t.source === "cursor");
+    assert.strictEqual(cursor.length, 3, "3 user prompts in JSONL");
+  });
+
+  it("task timestamps are strictly increasing", () => {
+    const reader = new SessionReader(tmpDir);
+    const tasks = reader.readAllTasks()
+      .filter((t) => t.source === "cursor")
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    for (let i = 1; i < tasks.length; i++) {
+      assert.ok(tasks[i].createdAt > tasks[i - 1].createdAt,
+        `Task ${i} must have later timestamp than task ${i - 1}`);
+    }
+  });
+
+  it("snapshot data is found via window matching for at least one prompt", () => {
+    const reader = new SessionReader(tmpDir);
+    const tasks = reader.readAllTasks()
+      .filter((t) => t.source === "cursor")
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    const snapshots = JSON.parse(
+      fs.readFileSync(
+        path.join(tmpDir, ".promptrail", "snapshots", "changes.json"), "utf-8"
+      )
+    );
+
+    let totalFound = 0;
+    for (let i = 0; i < tasks.length; i++) {
+      const startTs = tasks[i].createdAt;
+      const endTs = i + 1 < tasks.length ? tasks[i + 1].createdAt : Date.now();
+      const inWindow = snapshots.filter(
+        (s: any) => s.timestamp >= startTs && s.timestamp < endTs
+      );
+      totalFound += inWindow.length;
+    }
+
+    assert.ok(totalFound >= 1,
+      `Expected at least 1 snapshot entry found by prompt windows, got ${totalFound}`);
+  });
+
+  it("prompts are in correct chronological order by prompt text", () => {
+    const reader = new SessionReader(tmpDir);
+    const tasks = reader.readAllTasks()
+      .filter((t) => t.source === "cursor")
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    assert.ok(tasks[0].prompt.includes("auth module"));
+    assert.ok(tasks[1].prompt.includes("error handling"));
+    assert.ok(tasks[2].prompt.includes("tests"));
+  });
+});

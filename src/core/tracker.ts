@@ -35,8 +35,6 @@ export class Tracker {
       (a, b) => a.createdAt - b.createdAt
     );
 
-    const claudeWindows = this.buildClaudeWindows(sorted);
-
     for (let i = 0; i < sorted.length; i++) {
       if (sorted[i].source !== "cursor") continue;
 
@@ -46,26 +44,35 @@ export class Tracker {
 
       const { files } = this.fileWatcher.getChangesInWindow(
         startTs,
-        endTs,
-        claudeWindows
+        endTs
       );
+      const te = sorted[i] as TaskWithEdits;
+      const perPrompt = te.toolEditedFiles;
+      const session = te.sessionEditedFiles;
       if (files.length > 0) {
-        const whitelist = (sorted[i] as TaskWithEdits).toolEditedFiles;
-        sorted[i].filesChanged = whitelist
+        const whitelist = perPrompt && perPrompt.size > 0 ? perPrompt : session;
+        sorted[i].filesChanged = whitelist && whitelist.size > 0
           ? files.filter((f) => whitelist.has(f))
           : files;
+      }
+      if (sorted[i].filesChanged.length === 0 && perPrompt && perPrompt.size > 0) {
+        sorted[i].filesChanged = [...perPrompt];
       }
     }
 
     return sorted.sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  private buildClaudeWindows(
+  /**
+   * Builds time windows for sources that are self-contained (Claude, VS Code),
+   * so the file watcher excludes changes that belong to them.
+   */
+  private buildSelfContainedWindows(
     sorted: Task[]
   ): Array<{ start: number; end: number }> {
     const windows: Array<{ start: number; end: number }> = [];
     for (let i = 0; i < sorted.length; i++) {
-      if (sorted[i].source !== "claude") continue;
+      if (sorted[i].source !== "claude" && sorted[i].source !== "vscode") continue;
       const start = sorted[i].createdAt;
       const end =
         i + 1 < sorted.length ? sorted[i + 1].createdAt : Date.now();
@@ -87,7 +94,7 @@ export class Tracker {
       | undefined;
     if (!task) return undefined;
 
-    if (task.source === "claude") {
+    if (task.source === "claude" || task.source === "vscode") {
       return this.claudeChangeset(task);
     }
 
@@ -175,7 +182,7 @@ export class Tracker {
       return this.hardRollback(task, tasks);
     }
 
-    if (task.source === "claude") {
+    if (task.source === "claude" || task.source === "vscode") {
       return this.selectiveRollbackClaude(task);
     }
 

@@ -279,6 +279,7 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
 
   .source-dot.claude { background: var(--vscode-charts-orange); }
   .source-dot.cursor { background: var(--vscode-charts-blue); }
+  .source-dot.vscode { background: var(--vscode-charts-green); }
 
   .source-label {
     flex: 1;
@@ -507,8 +508,8 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
       app.innerHTML =
         '<div class="empty-state">' +
           '<h3>No sessions found</h3>' +
-          '<p>Promptrail reads sessions from Claude Code and Cursor automatically.<br><br>' +
-          'Use Claude Code or Cursor Agent to make changes, then check back here.</p>' +
+          '<p>Promptrail reads sessions from Claude Code, Cursor, and VS Code Chat automatically.<br><br>' +
+          'Use Claude Code, Cursor Agent, or VS Code Chat to make changes, then check back here.</p>' +
         '</div>';
       return;
     }
@@ -542,6 +543,7 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
     html += '<option value="all"' + (sourceFilter === 'all' ? ' selected' : '') + '>All sources</option>';
     html += '<option value="cursor"' + (sourceFilter === 'cursor' ? ' selected' : '') + '>Cursor</option>';
     html += '<option value="claude"' + (sourceFilter === 'claude' ? ' selected' : '') + '>Claude</option>';
+    html += '<option value="vscode"' + (sourceFilter === 'vscode' ? ' selected' : '') + '>VS Code</option>';
     html += '</select>';
     if (allModels.length > 1) {
       html += '<select class="filter-select" onchange="onModelFilter(this.value)">';
@@ -557,8 +559,8 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
 
     html += '<div class="task-list">';
 
-    const sourceOrder = ['cursor', 'claude', 'unknown'];
-    const sourceLabels = { cursor: 'Cursor', claude: 'Claude Code', unknown: 'Other' };
+    const sourceOrder = ['cursor', 'claude', 'vscode', 'unknown'];
+    const sourceLabels = { cursor: 'Cursor', claude: 'Claude Code', vscode: 'VS Code Chat', unknown: 'Other' };
 
     for (const src of sourceOrder) {
       const groupTasks = groups[src];
