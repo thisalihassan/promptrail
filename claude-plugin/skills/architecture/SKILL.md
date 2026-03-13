@@ -1,106 +1,71 @@
 ---
-description: Architecture guide for the Promptrail extension. Use when the user asks about how Promptrail works internally, its data model, module structure, design decisions, known limitations, or wants to understand the codebase before making changes.
+description: Architecture guide for the Promptrail CLI. Use when the user asks about how Promptrail works, its data model, CLI commands, or wants to understand the tool before making changes.
 ---
 
 # Promptrail Architecture
 
-VS Code / Cursor extension that reads AI agent sessions (Claude Code + Cursor) and presents a timeline of prompts with per-prompt file attribution, diffs, rollback, and a standalone CLI.
+CLI tool that reads Claude Code sessions and presents a timeline of prompts with per-prompt file attribution, diffs, search, and rollback.
 
-## Module Map
+## CLI Commands
 
 ```
-src/
-  extension.ts          -- VS Code activation, command registration
-  cli/
-    index.ts            -- Standalone CLI (timeline, diff, rollback, sessions)
-  core/
-    cursor-history.ts   -- SQLite interface to Cursor's state.vscdb (via node:sqlite)
-    session-reader.ts   -- Parses Claude + Cursor sessions into Task[]
-    tracker.ts          -- Orchestrates tasks, watcher, changesets, rollback
-    file-watcher.ts     -- Content cache + real-time snapshot capture
-    exporter.ts         -- Exports conversations to markdown
-  models/
-    types.ts            -- Shared interfaces (Task, FileChange, etc.)
-  views/
-    timeline-provider.ts -- Webview sidebar (HTML/JS timeline UI)
-tests/
-  *.test.ts             -- 102 tests covering all core logic + regression bugs
-  fixtures/             -- Mock JSONL, SQLite DB, gitignore, changes.json
-  mocks/vscode.ts       -- VS Code API mock for test builds
+promptrail timeline [--files]        All prompts with file counts
+promptrail diff <n|text>             Diff for prompt #n or matching text
+promptrail response <n|text>         AI response for prompt #n or matching text
+promptrail search <query>            Full-text search across prompts and responses
+promptrail rollback <n|text>         Cherry revert prompt's changes
+promptrail sessions                  List all sessions
 ```
 
-## Hybrid Architecture
+Filters: `--source claude` (always use this), `--model <substring>`
+Shortcuts: `tl`, `d`, `r`, `rb`, `s`
 
-Two data sources for Cursor sessions:
+## How Claude Code Data Works
 
-- **SQLite** (`node:sqlite`, read-only, cached): real timestamps, V0 file content, model/mode metadata, first-edit attribution
-- **File Watcher** (real-time): captures actual before/after content when files change, matched to prompts by timestamp windows
+Claude Code JSONL at `~/.claude/projects/<encoded-workspace>/` is self-contained. Each session file has:
 
-Claude Code sessions are self-contained: JSONL has prompts, timestamps, and full tool_use blocks.
+- **User messages**: `role: "human"`, `content[].text` contains the prompt
+- **Assistant messages**: `role: "assistant"` with `content[]` containing text blocks and `tool_use` blocks
+- **Tool use blocks**: `type: "tool_use"` with `name` (Edit, Write, etc.) and `input` containing `file_path`, `old_string`, `new_string`, or `content`
+- **Timestamps**: Each message has a real timestamp
 
-### Why Hybrid (Not Pure SQLite)
+No SQLite or file watcher needed -- the JSONL has everything for prompts, file changes, and rollback.
 
-We tried pure SQLite checkpoint-based tracking. It had 8 bugs:
-1. Checkpoint diffs get internally rewritten between prompts (phantom changes)
-2. `firstEditBubbleId` only tracks first edit (re-edits invisible)
-3. Deleted files produce phantom diffs for every prompt
-4. Newly created files appear under all subsequent prompts
-5. `node:sqlite` returns timestamps as strings (silent NaN comparison failure)
-6. `better-sqlite3` ABI mismatch (silent failure in Electron)
-7. Informational prompts showed file changes
-8. `dist/` files leaked through broken gitignore matching
+### Edit Tools in Claude Code JSONL
 
-The file watcher solves all of these by capturing actual disk writes with real timestamps.
+| Tool Name | Purpose | Key Fields |
+|-----------|---------|------------|
+| `Edit` | String replacement | `file_path`, `old_string`, `new_string` |
+| `Write` | File creation/overwrite | `file_path`, `content` |
+| `MultiEdit` | Multiple edits in one call | `file_path`, `edits[]` |
 
 ## Data Flow
 
 ```
-Tracker polls every 4s
-  |-> SessionReader.readAllTasks()
-  |     |-> Claude: parse JSONL (prompts + tool_use)
-  |     |-> Cursor: parse JSONL (prompts only) + SQLite (timestamps, V0, model)
-  |-> FileWatcher.getChangesInWindow(startTs, endTs, claudeWindows)
-  |     |-> Filter changes by timestamp window
-  |     |-> Exclude changes inside Claude prompt windows
-  |-> Override Cursor task.filesChanged with watcher data
-  |-> TimelineProvider renders in webview
+SessionReader.readAllTasks()
+  |-> Parse Claude Code JSONL (prompts + tool_use blocks for file changes)
+  |-> Returns Task[] sorted chronologically
 ```
 
-## Key Design Decisions
+Each Task has: `id`, `prompt`, `createdAt`, `filesChanged`, `source`, `model`
 
-### Timestamp window matching (not task ID tagging)
+## Key Files
 
-The watcher records every change with `Date.now()`. At query time, the Tracker matches changes to prompts: a change between prompt N's `createdAt` and prompt N+1's `createdAt` belongs to prompt N.
-
-### Claude window exclusion
-
-The Tracker builds time windows for all Claude prompts. When querying watcher changes for a Cursor prompt, changes inside Claude windows are filtered out.
-
-### `.gitignore` respect with NEVER_IGNORE
-
-The watcher reads `.gitignore` at startup. `.cursor/` and `.claude/` are protected from ignoring. `.git/` and `.promptrail/` are always ignored.
-
-### `toEpochMs()` for all SQLite timestamps
-
-`node:sqlite` may return timestamps as ISO strings instead of numbers. `toEpochMs()` handles both formats.
-
-### SQLite caching (10-second TTL)
-
-`getOrLoadSession()` reads composerData + all bubble timestamps + file mapping in one DB open/close and caches for 10 seconds.
-
-## Known Bugs / Limitations
-
-- File watcher only captures changes while the extension is running
-- `.gitignore` is read once at startup; changes mid-session require reload
-- Claude Code rollback not yet implemented (diffs show edit hunks, not full file before/after)
-- Model/mode is session-level from SQLite, not per-prompt
-- Windows path encoding may not handle backslashes correctly
+| File | Purpose |
+|------|---------|
+| `src/cli/index.ts` | CLI entry point, all commands |
+| `src/core/session-reader.ts` | Parses Claude Code sessions into Task[] |
+| `src/core/selective-revert.ts` | Cherry revert logic (exact string matching) |
+| `src/models/types.ts` | Shared interfaces (Task, FileChange, etc.) |
 
 ## Platform Paths
 
 | Data | Path |
 |------|------|
-| Cursor SQLite DB | Platform-dependent: `getCursorUserDir()` in `cursor-history.ts` |
-| Cursor transcripts | `~/.cursor/projects/<workspace>/agent-transcripts/` |
 | Claude sessions | `~/.claude/projects/<workspace>/` |
-| Watcher snapshots | `.promptrail/snapshots/changes.json` in workspace root |
+| Shadow DB | `.promptrail/promptrail.db` in workspace root |
+
+## Known Limitations
+
+- Claude Code rollback uses selective string-matching revert (exact `old_string`/`new_string` from tool calls), not full file before/after snapshots
+- Hard rollback (Restore Files) is not yet supported for Claude Code sessions

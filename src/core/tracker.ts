@@ -475,6 +475,20 @@ export class Tracker {
       return md;
     }
 
+    if (task.source === "claude") {
+      const parts = taskId.split("-");
+      const promptIndex = parseInt(parts[parts.length - 1], 10);
+      const sessionId = task.sessionId || parts.slice(1, -1).join("-");
+
+      const responseText = this.sessionReader.getClaudeResponse(sessionId, promptIndex);
+      if (!responseText) return undefined;
+
+      let md = `# Response\n\n`;
+      md += `> **Prompt:** ${task.prompt}\n\n---\n\n`;
+      md += responseText;
+      return md;
+    }
+
     return undefined;
   }
 
