@@ -4,22 +4,22 @@ description: Show the timeline of all AI prompts in this project with file chang
 
 # Timeline
 
-Show the full timeline of AI agent prompts (Claude Code + Cursor) for this project.
+Show the full timeline of Claude Code prompts for this project.
 
 Run the `promptrail` CLI from the project root:
 
 ```bash
-promptrail timeline --files
+promptrail timeline --files --source claude
 ```
 
-Optional filters:
-- `--source claude` or `--source cursor` — show only one source
-- `--model <substring>` — filter by model name (e.g. `--model sonnet`, `--model gpt`)
-- Combine: `promptrail timeline --files --source claude --model sonnet`
+Optional filter:
+- `--model <substring>` — filter by model name (e.g. `--model sonnet`)
+- Example: `promptrail timeline --files --source claude --model sonnet`
+
+Pass `--source claude` to show only Claude Code prompts.
 
 This shows every prompt chronologically with:
 - Prompt index (#0, #1, ...)
-- Source (Claude Code or Cursor)
 - Truncated prompt text
 - Number of files changed
 - Time ago
@@ -36,3 +36,5 @@ npm link
 Then retry the timeline command.
 
 Present the output to the user in a clean, readable format. Highlight prompts that changed many files.
+
+To search across prompts and responses, use `promptrail search "query"`. To view a specific prompt's AI response, use `promptrail response <n>`.

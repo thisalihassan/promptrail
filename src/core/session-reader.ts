@@ -78,6 +78,58 @@ export class SessionReader {
     return absPath;
   }
 
+  getClaudeResponse(sessionId: string, promptIndex: number): string | undefined {
+    const dir = this.getClaudeProjectDir();
+    if (!dir) return undefined;
+
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+    if (!fs.existsSync(filePath)) return undefined;
+
+    try {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const lines = raw.split("\n").filter((l) => l.trim());
+      let promptIdx = -1;
+      let collecting = false;
+      const parts: string[] = [];
+
+      for (const line of lines) {
+        let obj: any;
+        try { obj = JSON.parse(line); } catch { continue; }
+
+        if (obj.type === "user") {
+          const text = this.extractClaudePrompt(obj);
+          if (!text) continue;
+          if (collecting) break;
+          promptIdx++;
+          if (promptIdx === promptIndex) collecting = true;
+        } else if (obj.type === "assistant" && collecting) {
+          const content = obj.message?.content;
+          if (!Array.isArray(content)) continue;
+          for (const c of content) {
+            if (c?.type === "text" && c.text) {
+              parts.push(c.text);
+            } else if (c?.type === "tool_use") {
+              const name = c.name || "";
+              const inp = c.input || {};
+              if (inp.file_path) {
+                parts.push(`**[${name}]** ${inp.file_path}`);
+              } else if (inp.command) {
+                parts.push(`**[${name}]** \`${inp.command}\``);
+              } else {
+                parts.push(`**[${name}]**`);
+              }
+            }
+          }
+        }
+      }
+
+      if (parts.length === 0) return undefined;
+      return parts.join("\n\n");
+    } catch {
+      return undefined;
+    }
+  }
+
   // ── Claude Code ──────────────────────────────────────────
 
   private getClaudeProjectDir(): string | undefined {

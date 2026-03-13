@@ -100,17 +100,14 @@ cursor --install-extension promptrail-*.vsix
 
 ### Claude Code Plugin
 
-Promptrail includes a Claude Code plugin that auto-tracks prompts and file edits via hooks:
+Promptrail includes a Claude Code plugin that adds skills for timeline, diff, search, response, and rollback. Install from inside Claude Code:
 
-```bash
-# Install for all sessions
-claude plugin install /path/to/promptrail/claude-plugin
-
-# Or use for a single session
-claude --plugin-dir /path/to/promptrail/claude-plugin
+```
+/plugin marketplace add thisalihassan/promptrail
+/plugin install promptrail@promptrail
 ```
 
-Once installed, Claude Code sessions are automatically tracked -- no extra commands needed. The timeline, diffs, and rollback all work through the CLI or the editor extension.
+Once installed, Claude Code sessions are automatically tracked via hooks. The timeline, diffs, search, and rollback all work through the CLI. See [claude-plugin/README.md](claude-plugin/README.md) for full usage.
 
 ### For Development
 

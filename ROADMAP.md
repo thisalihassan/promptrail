@@ -15,6 +15,8 @@
 - **Assistant response capture** — shadow DB preserves AI responses (text + tool calls) per prompt before Cursor prunes bubble data
 - **View Response** — view AI responses in extension sidebar and CLI (`promptrail response <n>`)
 - **Full-text search** — FTS5-powered search across prompts and responses in CLI (`promptrail search`) and sidebar
+- **Claude Code plugin marketplace** — installable via `/plugin marketplace add thisalihassan/promptrail`
+- **Claude Code response viewing** — `promptrail response` works for Claude Code sessions
 - **CHANGELOG** — marketplace-ready changelog
 
 ## Planned

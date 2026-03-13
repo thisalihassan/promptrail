@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-03-13
+
+### Added
+- **Claude Code response viewing** — `promptrail response` now works for Claude Code sessions, reading responses directly from JSONL (text replies + tool calls with file paths and commands)
+- **Claude Code plugin marketplace** — repo is now a Claude Code plugin marketplace. Install with `/plugin marketplace add thisalihassan/promptrail` then `/plugin install promptrail@promptrail`
+- **Claude Code plugin README** — full installation and usage docs at `claude-plugin/README.md`
+
+### Changed
+- **Claude Code plugin skills rewritten** — all 7 skills (architecture, timeline, diff, response, search, rollback, sessions) are now Claude Code-focused with `--source claude` defaults. Removed Cursor/VS Code references.
+- Removed `vscode-chat-internals` skill from Claude Code plugin (irrelevant for Claude Code users)
+
 ## [0.6.2] - 2026-03-13
 
 ### Added
@@ -117,7 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/thisalihassan/promptrail/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/thisalihassan/promptrail/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/thisalihassan/promptrail/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/thisalihassan/promptrail/compare/v0.5.2...v0.6.0

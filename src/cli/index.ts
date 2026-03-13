@@ -535,42 +535,60 @@ function cmdResponse(selector: string, flags: Flags = { positional: [] }): void 
     process.exit(1);
   }
 
-  if (task.source !== "cursor") {
-    console.log(`${DIM}Response viewing is currently supported for Cursor sessions only.${RESET}`);
-    return;
-  }
-
-  const parts = task.id.split("-");
-  const userIndex = parseInt(parts[parts.length - 1], 10);
-  const shortId = parts.slice(1, -1).join("-");
-
-  const db = reader.getPromptRailDB();
-  const fullComposerId = db.findComposerIdByPrefix(shortId);
-  if (!fullComposerId) {
-    console.log(`${DIM}No response data available for this prompt.${RESET}`);
-    return;
-  }
-  const bubbles = db.getAssistantBubbles(fullComposerId);
-  const forPrompt = bubbles.filter((b: any) => b.userIndex === userIndex);
-
-  if (forPrompt.length === 0) {
-    console.log(`${DIM}No response data available for this prompt.${RESET}`);
-    console.log(`${DIM}The shadow DB must snapshot the session while Cursor still has the bubble data.${RESET}`);
-    return;
-  }
-
   const idx = sorted.indexOf(task);
-  console.log(`${BOLD}Response for #${idx}:${RESET} ${truncate(task.prompt, 70)}`);
-  console.log(`${DIM}${timeAgo(task.createdAt)} | ${task.source} | ${forPrompt.length} bubble(s)${RESET}\n`);
 
-  for (const b of forPrompt) {
-    if (b.toolName) {
-      console.log(`  ${CYAN}[${b.toolName}]${RESET} ${DIM}${b.toolStatus || ""}${RESET}`);
+  if (task.source === "cursor") {
+    const parts = task.id.split("-");
+    const userIndex = parseInt(parts[parts.length - 1], 10);
+    const shortId = parts.slice(1, -1).join("-");
+
+    const db = reader.getPromptRailDB();
+    const fullComposerId = db.findComposerIdByPrefix(shortId);
+    if (!fullComposerId) {
+      console.log(`${DIM}No response data available for this prompt.${RESET}`);
+      return;
     }
-    if (b.text) {
-      console.log(`${b.text}\n`);
+    const bubbles = db.getAssistantBubbles(fullComposerId);
+    const forPrompt = bubbles.filter((b: any) => b.userIndex === userIndex);
+
+    if (forPrompt.length === 0) {
+      console.log(`${DIM}No response data available for this prompt.${RESET}`);
+      console.log(`${DIM}The shadow DB must snapshot the session while Cursor still has the bubble data.${RESET}`);
+      return;
     }
+
+    console.log(`${BOLD}Response for #${idx}:${RESET} ${truncate(task.prompt, 70)}`);
+    console.log(`${DIM}${timeAgo(task.createdAt)} | ${task.source} | ${forPrompt.length} bubble(s)${RESET}\n`);
+
+    for (const b of forPrompt) {
+      if (b.toolName) {
+        console.log(`  ${CYAN}[${b.toolName}]${RESET} ${DIM}${b.toolStatus || ""}${RESET}`);
+      }
+      if (b.text) {
+        console.log(`${b.text}\n`);
+      }
+    }
+    return;
   }
+
+  if (task.source === "claude") {
+    const parts = task.id.split("-");
+    const promptIndex = parseInt(parts[parts.length - 1], 10);
+    const sessionId = task.sessionId || parts.slice(1, -1).join("-");
+
+    const responseText = reader.getClaudeResponse(sessionId, promptIndex);
+    if (!responseText) {
+      console.log(`${DIM}No response data available for this prompt.${RESET}`);
+      return;
+    }
+
+    console.log(`${BOLD}Response for #${idx}:${RESET} ${truncate(task.prompt, 70)}`);
+    console.log(`${DIM}${timeAgo(task.createdAt)} | ${task.source}${RESET}\n`);
+    console.log(responseText);
+    return;
+  }
+
+  console.log(`${DIM}Response viewing is not yet supported for ${task.source} sessions.${RESET}`);
 }
 
 function cmdSessions(flags: Flags): void {
