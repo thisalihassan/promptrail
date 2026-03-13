@@ -64,6 +64,22 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
           vscode.commands.executeCommand("promptrail.viewTaskDiff", msg.taskId);
         }
         break;
+      case "viewResponse":
+        if (msg.taskId) {
+          vscode.commands.executeCommand("promptrail.viewResponse", msg.taskId);
+        }
+        break;
+      case "search":
+        if (msg.query && this.view) {
+          const results = this.tracker.searchPrompts(msg.query);
+          const matchedIds = results.map((r) => r.taskId);
+          this.view.webview.postMessage({
+            type: "searchResults",
+            matchedTaskIds: matchedIds,
+            query: msg.query,
+          });
+        }
+        break;
     }
   }
 
@@ -452,10 +468,16 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
   let filesOnly = false;
   let sourceFilter = 'all';
   let modelFilter = 'all';
+  let ftsMatchedIds = new Set();
+  let searchTimer = null;
 
   window.addEventListener('message', (e) => {
     if (e.data.type === 'updateState') {
       state = { tasks: e.data.tasks, activeTaskId: e.data.activeTaskId };
+      render();
+    }
+    if (e.data.type === 'searchResults') {
+      ftsMatchedIds = new Set(e.data.matchedTaskIds || []);
       render();
     }
   });
@@ -488,7 +510,8 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
       const q = searchQuery.toLowerCase();
       filtered = filtered.filter(t =>
         t.prompt.toLowerCase().includes(q) ||
-        (t.filesChanged || []).some(f => f.toLowerCase().includes(q))
+        (t.filesChanged || []).some(f => f.toLowerCase().includes(q)) ||
+        ftsMatchedIds.has(t.id)
       );
     }
 
@@ -612,13 +635,14 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
           }
           html += '</ul>';
         }
+        html += '<div class="task-actions">';
+        html += '<button class="action-btn" onclick="event.stopPropagation(); viewResponse(\\'' + t.id + '\\')">View Response</button>';
         if (hasFiles) {
-          html += '<div class="task-actions">';
           html += '<button class="action-btn" onclick="event.stopPropagation(); viewDiff(\\'' + t.id + '\\')">View Diff</button>';
           html += '<button class="action-btn" onclick="event.stopPropagation(); rollback(\\'' + t.id + '\\')">Cherry Revert</button>';
           html += '<button class="action-btn danger" onclick="event.stopPropagation(); hardRollback(\\'' + t.id + '\\')">Restore Files</button>';
-          html += '</div>';
         }
+        html += '</div>';
         html += '</div>';
 
         html += '</div>';
@@ -628,7 +652,15 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
     }
 
     html += '</div>';
+    var hadFocus = document.activeElement && document.activeElement.classList.contains('search-input');
     app.innerHTML = html;
+    if (hadFocus) {
+      var inp = app.querySelector('.search-input');
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(searchQuery.length, searchQuery.length);
+      }
+    }
   }
 
   function toggle(id) {
@@ -643,7 +675,14 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
 
   function onSearch(val) {
     searchQuery = val;
+    ftsMatchedIds = new Set();
     render();
+    if (searchTimer) clearTimeout(searchTimer);
+    if (val.length >= 3) {
+      searchTimer = setTimeout(function() {
+        vscode.postMessage({ type: 'search', query: val });
+      }, 300);
+    }
   }
 
   function onFilesOnly(checked) {
@@ -659,6 +698,10 @@ export class TimelineProvider implements vscode.WebviewViewProvider {
   function onModelFilter(val) {
     modelFilter = val;
     render();
+  }
+
+  function viewResponse(id) {
+    vscode.postMessage({ type: 'viewResponse', taskId: id });
   }
 
   function viewDiff(id) {

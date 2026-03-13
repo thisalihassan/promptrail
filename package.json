@@ -78,6 +78,12 @@
         "icon": "$(diff)"
       },
       {
+        "command": "promptrail.viewResponse",
+        "title": "View AI Response",
+        "category": "Promptrail",
+        "icon": "$(comment-discussion)"
+      },
+      {
         "command": "promptrail.exportChat",
         "title": "Export Chat to Markdown",
         "category": "Promptrail",

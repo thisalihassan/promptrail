@@ -440,6 +440,65 @@ export class Tracker {
     return result;
   }
 
+  getTaskResponse(taskId: string): string | undefined {
+    const tasks = this.sessionReader.readAllTasks();
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return undefined;
+
+    if (task.source === "cursor") {
+      const parts = taskId.split("-");
+      const userIndex = parseInt(parts[parts.length - 1], 10);
+      const shortId = parts.slice(1, -1).join("-");
+
+      const db = this.sessionReader.getPromptRailDB();
+      const fullComposerId = db.findComposerIdByPrefix(shortId);
+      if (!fullComposerId) return undefined;
+      const bubbles = db.getAssistantBubbles(fullComposerId);
+      const forPrompt = bubbles.filter(
+        (b: any) => b.userIndex === userIndex
+      );
+
+      if (forPrompt.length === 0) return undefined;
+
+      let md = `# Response\n\n`;
+      md += `> **Prompt:** ${task.prompt}\n\n---\n\n`;
+
+      for (const b of forPrompt) {
+        if (b.toolName) {
+          md += `**[${b.toolName}]** ${b.toolStatus || ""}\n\n`;
+        }
+        if (b.text) {
+          md += `${b.text}\n\n`;
+        }
+      }
+
+      return md;
+    }
+
+    return undefined;
+  }
+
+  isFtsAvailable(): boolean {
+    return this.sessionReader.getPromptRailDB().isFtsAvailable();
+  }
+
+  searchPrompts(
+    query: string,
+    filters?: { source?: string; model?: string }
+  ): Array<{ taskId: string; type: string; snippet: string }> {
+    const db = this.sessionReader.getPromptRailDB();
+    if (!db.isFtsAvailable()){
+      return [];
+    }
+
+    const results = db.search(query, filters);
+    return results.map((r) => ({
+      taskId: `cur-${r.composerId.slice(0, 8)}-${r.userIndex}`,
+      type: r.type,
+      snippet: r.snippet,
+    }));
+  }
+
   refresh(): void {
     this.sessionReader.getCursorHistory().invalidateCache();
     this.onDidChangeEmitter.fire();

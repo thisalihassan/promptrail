@@ -93,6 +93,32 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
+      "promptrail.viewResponse",
+      async (taskId?: string) => {
+        if (!taskId) {
+          taskId = await pickTask("View response for which task?");
+        }
+        if (!taskId) return;
+
+        const md = tracker!.getTaskResponse(taskId);
+        if (!md) {
+          vscode.window.showInformationMessage(
+            "No response data available for this task. Response capture requires the shadow DB to have snapshotted the session while Cursor still had the bubble data."
+          );
+          return;
+        }
+
+        const doc = await vscode.workspace.openTextDocument({
+          content: md,
+          language: "markdown",
+        });
+        await vscode.window.showTextDocument(doc, { preview: true });
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
       "promptrail.rollbackToTask",
       async (taskId?: string, mode?: "selective" | "hard") => {
         if (!taskId) {

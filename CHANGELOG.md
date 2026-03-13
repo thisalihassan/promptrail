@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Assistant response capture** — shadow DB now preserves AI responses (text replies + tool calls) per prompt before Cursor prunes bubble data. New `assistant_bubbles` table with append-only snapshots.
+- **View Response** button in the timeline sidebar — available on every prompt, opens the AI's full response as a markdown document
+- **`promptrail response <n|text>`** CLI command — view AI response for any prompt by number or text match (shortcut: `r`)
+- **`Promptrail: View AI Response`** extension command — also available from the command palette
+- **Full-text search** across prompts and AI responses via SQLite FTS5 — search by keywords, code symbols, or concepts
+- **`promptrail search <query>`** CLI command — search with `--source` and `--model` filters, results show highlighted snippets from matching prompts and responses
+- **Sidebar search enhanced** — typing 3+ characters now also searches AI response text via FTS5, surfacing prompts that match only in the response
+
 ## [0.6.1] - 2026-03-13
 
 ### Fixed
