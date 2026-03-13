@@ -30,10 +30,11 @@ Promptrail reads your AI sessions automatically — no manual tagging, no config
 - **Browse**: See every prompt in the sidebar timeline, grouped by source (Cursor / Claude)
 - **Trace**: See exactly which files changed for each prompt, with model and mode badges
 - **Diff**: View before/after diffs for any prompt's changes
+- **View Response**: Read the AI's full response for any prompt (text replies + tool calls)
 - **Cherry Revert**: Undo a specific prompt's changes without losing unrelated work
 - **Restore Files**: Hard reset files to their exact state before a prompt (overwrites later edits)
 - **Export**: Export any conversation to markdown
-- **Search**: Filter prompts by text or file name
+- **Search**: Full-text search across prompts and AI responses (FTS5), or filter by file name
 - **Filter**: Toggle to show only prompts that changed files
 
 ## Extension Commands
@@ -42,6 +43,7 @@ Promptrail reads your AI sessions automatically — no manual tagging, no config
 |---------|-------------|
 | `Promptrail: Refresh Timeline` | Refresh the sidebar timeline |
 | `Promptrail: View Task Diff` | Open before/after diffs for a prompt's changes |
+| `Promptrail: View AI Response` | View the AI's response for a prompt (text + tool calls) |
 | `Promptrail: Rollback to Task` | Cherry Revert or Restore Files — choose rollback mode |
 | `Promptrail: Export Chat to Markdown` | Export a conversation as `.md` |
 
@@ -123,6 +125,8 @@ promptrail timeline              # List all prompts with file counts and model b
 promptrail timeline --files      # Include file lists per prompt
 promptrail diff 3                # Show diff for prompt #3
 promptrail diff "refactor auth"  # Diff for prompt matching text
+promptrail response 3            # Show AI response for prompt #3
+promptrail search "shadow DB"    # Search prompts and responses (FTS5)
 promptrail rollback 5            # Cherry revert prompt #5 (preserves later edits)
 promptrail rollback 5 --hard     # Restore files to state before prompt #5
 promptrail --version             # Print version
@@ -138,7 +142,7 @@ promptrail timeline -s cursor    # Only Cursor prompts
 promptrail timeline -m sonnet    # Only prompts using sonnet models
 ```
 
-Shortcuts: `tl` for timeline, `d` for diff, `rb` for rollback, `s` for sessions, `mg` for migrate.
+Shortcuts: `tl` for timeline, `d` for diff, `r` for response, `rb` for rollback, `s` for sessions, `mg` for migrate. Search has no shortcut to avoid collision with `sessions`.
 
 ### Session Migration
 

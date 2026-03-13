@@ -34,11 +34,14 @@ export interface TimelineMessage {
     | "hardRollback"
     | "fork"
     | "viewDiff"
+    | "viewResponse"
     | "endTask"
     | "expandTask"
     | "refresh"
+    | "search"
     | "ready";
   taskId?: string;
+  query?: string;
 }
 
 export interface TimelineUpdate {

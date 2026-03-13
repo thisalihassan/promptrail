@@ -274,7 +274,8 @@ export class CursorHistory {
 
       if (this.promptrailDb) {
         const cachedCount = this.promptrailDb.getCachedBubbleCount(composerId);
-        if (cachedCount < userBubbleIds.length) {
+        const cachedAssistantCount = this.promptrailDb.getCachedAssistantBubbleCount(composerId);
+        if (cachedCount < userBubbleIds.length || cachedAssistantCount === 0) {
           this.snapshotToPromptRailDB(
             composerId, data, session, bubbles, userBubbleIndices,
             timestamps, perPromptFiles, files, db
@@ -323,6 +324,7 @@ export class CursorHistory {
       }
 
       const toolCallRows: any[] = [];
+      const assistantBubbleRows: any[] = [];
       for (let u = 0; u < userBubbleIndices.length; u++) {
         const startIdx = userBubbleIndices[u];
         const endIdx = u + 1 < userBubbleIndices.length
@@ -336,6 +338,18 @@ export class CursorHistory {
             if (!bRow) continue;
             const bd = JSON.parse(bRow.value);
             const tfd = bd.toolFormerData;
+
+            assistantBubbleRows.push({
+              bubbleIndex: bi,
+              userIndex: u,
+              bubbleId: bubbles[bi].bubbleId,
+              text: bd.text || "",
+              createdAt: toEpochMs(bd.createdAt),
+              toolName: tfd?.name || "",
+              toolCallId: tfd?.toolCallId || "",
+              toolStatus: tfd?.status || "",
+            });
+
             if (!tfd) continue;
             const params = tfd.params ? JSON.parse(tfd.params) : {};
             const fp = params.relativeWorkspacePath || "";
@@ -368,7 +382,8 @@ export class CursorHistory {
         userBubbleRows,
         toolCallRows,
         perPromptFiles,
-        sfRows
+        sfRows,
+        assistantBubbleRows
       );
     } catch {}
   }

@@ -12,6 +12,9 @@
 - **Per-prompt file attribution** — uses Cursor SQLite `toolFormerData` to filter out `git pull` and manual edits from the file watcher
 - **SQLite-first Cursor parsing** — uses SQLite user bubbles as canonical prompt list, eliminating JSONL noise (duplicates, auto-continues)
 - **Shadow DB** — `.promptrail/promptrail.db` caches Cursor bubble data before it gets pruned or collapsed
+- **Assistant response capture** — shadow DB preserves AI responses (text + tool calls) per prompt before Cursor prunes bubble data
+- **View Response** — view AI responses in extension sidebar and CLI (`promptrail response <n>`)
+- **Full-text search** — FTS5-powered search across prompts and responses in CLI (`promptrail search`) and sidebar
 - **CHANGELOG** — marketplace-ready changelog
 
 ## Planned

@@ -522,6 +522,57 @@ function cmdRollback(selector: string, hard = false): void {
   }
 }
 
+function cmdResponse(selector: string, flags: Flags = { positional: [] }): void {
+  const wsRoot = getWorkspaceRoot();
+  const reader = new SessionReader(wsRoot);
+  const tasks = reader.readAllTasks();
+  const filtered = filterTasks(tasks, flags);
+  const sorted = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
+
+  const task = resolveTask(sorted, selector);
+  if (!task) {
+    console.error(`${RED}No task matching "${selector}"${RESET}`);
+    process.exit(1);
+  }
+
+  if (task.source !== "cursor") {
+    console.log(`${DIM}Response viewing is currently supported for Cursor sessions only.${RESET}`);
+    return;
+  }
+
+  const parts = task.id.split("-");
+  const userIndex = parseInt(parts[parts.length - 1], 10);
+  const shortId = parts.slice(1, -1).join("-");
+
+  const db = reader.getPromptRailDB();
+  const fullComposerId = db.findComposerIdByPrefix(shortId);
+  if (!fullComposerId) {
+    console.log(`${DIM}No response data available for this prompt.${RESET}`);
+    return;
+  }
+  const bubbles = db.getAssistantBubbles(fullComposerId);
+  const forPrompt = bubbles.filter((b: any) => b.userIndex === userIndex);
+
+  if (forPrompt.length === 0) {
+    console.log(`${DIM}No response data available for this prompt.${RESET}`);
+    console.log(`${DIM}The shadow DB must snapshot the session while Cursor still has the bubble data.${RESET}`);
+    return;
+  }
+
+  const idx = sorted.indexOf(task);
+  console.log(`${BOLD}Response for #${idx}:${RESET} ${truncate(task.prompt, 70)}`);
+  console.log(`${DIM}${timeAgo(task.createdAt)} | ${task.source} | ${forPrompt.length} bubble(s)${RESET}\n`);
+
+  for (const b of forPrompt) {
+    if (b.toolName) {
+      console.log(`  ${CYAN}[${b.toolName}]${RESET} ${DIM}${b.toolStatus || ""}${RESET}`);
+    }
+    if (b.text) {
+      console.log(`${b.text}\n`);
+    }
+  }
+}
+
 function cmdSessions(flags: Flags): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
@@ -550,6 +601,84 @@ function cmdSessions(flags: Flags): void {
     const color = info.source === "cursor" ? BLUE : info.source === "vscode" ? GREEN : MAGENTA;
     const model = info.model ? `${DIM}[${info.model.replace("claude-", "").replace("-thinking", "")}]${RESET}` : "";
     console.log(`  ${color}${info.source}${RESET}  ${id.slice(0, 8)}  ${info.count} prompts  ${DIM}${timeAgo(info.latest)}${RESET} ${model}`);
+  }
+}
+
+function cmdSearch(query: string, flags: Flags): void {
+  const wsRoot = getWorkspaceRoot();
+  const reader = new SessionReader(wsRoot);
+  reader.readAllTasks();
+
+  const db = reader.getPromptRailDB();
+  if (!db.isFtsAvailable()) {
+    console.log(`${DIM}Full-text search not available in this runtime.${RESET}`);
+    return;
+  }
+
+  const results = db.search(query, {
+    source: flags.source,
+    model: flags.model,
+  });
+
+  if (results.length === 0) {
+    console.log(`${DIM}No results for "${query}"${flags.source || flags.model ? " with current filters" : ""}.${RESET}`);
+    return;
+  }
+
+  const seen = new Set<string>();
+  const grouped: Array<{
+    composerId: string;
+    userIndex: number;
+    promptText: string;
+    model: string;
+    createdAt: number;
+    promptSnippet?: string;
+    responseSnippet?: string;
+  }> = [];
+
+  for (const r of results) {
+    const key = `${r.composerId}:${r.userIndex}`;
+    const existing = grouped.find((g) => `${g.composerId}:${g.userIndex}` === key);
+    if (existing) {
+      if (r.type === "prompt") existing.promptSnippet = r.snippet;
+      else existing.responseSnippet = r.snippet;
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    grouped.push({
+      composerId: r.composerId,
+      userIndex: r.userIndex,
+      promptText: r.promptText,
+      model: r.model,
+      createdAt: r.createdAt,
+      promptSnippet: r.type === "prompt" ? r.snippet : undefined,
+      responseSnippet: r.type === "response" ? r.snippet : undefined,
+    });
+  }
+
+  console.log(`\n${BOLD}Search: "${query}"${RESET}  ${DIM}${grouped.length} result(s)${RESET}\n`);
+
+  for (const g of grouped) {
+    const model = g.model ? `${DIM}[${g.model.replace("claude-", "").replace("-thinking", "")}]${RESET}` : "";
+    const time = `${DIM}${timeAgo(g.createdAt)}${RESET}`;
+    const prompt = truncate(g.promptText, 80);
+
+    console.log(`  ${BLUE}cursor${RESET} ${prompt}  ${time} ${model}`);
+
+    if (g.promptSnippet) {
+      const highlighted = g.promptSnippet
+        .replace(/>>>/g, YELLOW).replace(/<<</g, RESET)
+        .replace(/\n/g, " ");
+      console.log(`    ${DIM}prompt:${RESET} ${highlighted}`);
+    }
+    if (g.responseSnippet) {
+      const highlighted = g.responseSnippet
+        .replace(/>>>/g, YELLOW).replace(/<<</g, RESET)
+        .replace(/\n/g, " ");
+      console.log(`    ${DIM}response:${RESET} ${highlighted}`);
+    }
+    console.log();
   }
 }
 
@@ -681,8 +810,10 @@ ${BOLD}Promptrail${RESET} — prompt-level version control for AI code editing
 ${BOLD}Usage:${RESET}
   promptrail timeline [--files]     Show all prompts with file change counts
   promptrail diff <n|text>          Show diff for prompt #n or matching text
+  promptrail response <n|text>      Show AI response for prompt #n or matching text
   promptrail rollback <n|text>      Cherry revert (undo only this prompt's changes)
   promptrail rollback <n|text> --hard  Restore files (restore to pre-prompt state)
+  promptrail search <query>          Search prompts and responses (FTS5)
   promptrail sessions               List all sessions
   promptrail migrate <source-path>   Migrate all sessions from another workspace
   promptrail export [output.json]   Export all sessions to a portable file
@@ -700,6 +831,9 @@ ${BOLD}Examples:${RESET}
   promptrail timeline -s cursor -m gpt  Cursor prompts with gpt models
   promptrail diff 3                 Diff for prompt #3
   promptrail diff "refactor auth"   Diff for prompt matching text
+  promptrail response 3             Show AI response for prompt #3
+  promptrail search "shadow DB"     Search prompts and responses
+  promptrail search "auth" -m sonnet  Search with model filter
   promptrail sessions -s claude     Only Claude Code sessions
   promptrail rollback 5             Cherry revert prompt #5
   promptrail rollback 5 --hard      Restore files for prompt #5 (overwrites later changes)
@@ -729,6 +863,25 @@ switch (command) {
       process.exit(1);
     }
     cmdDiff(selector, flags);
+    break;
+  }
+  case "response":
+  case "r": {
+    const sel = flags.positional[0];
+    if (!sel) {
+      console.error(`${RED}Usage: promptrail response <prompt-number|text> [--source cursor] [--model <name>]${RESET}`);
+      process.exit(1);
+    }
+    cmdResponse(sel, flags);
+    break;
+  }
+  case "search": {
+    const q = flags.positional.join(" ");
+    if (!q) {
+      console.error(`${RED}Usage: promptrail search <query> [--source cursor] [--model <name>]${RESET}`);
+      process.exit(1);
+    }
+    cmdSearch(q, flags);
     break;
   }
   case "rollback":

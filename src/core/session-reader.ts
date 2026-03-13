@@ -59,6 +59,10 @@ export class SessionReader {
     return this.cachedTasks;
   }
 
+  getPromptRailDB(): PromptRailDB {
+    return this.promptrailDb;
+  }
+
   getCursorHistory(): CursorHistory {
     return this.cursorHistory;
   }
