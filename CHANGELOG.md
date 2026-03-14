@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-03-14
+
+### Fixed
+- **Search now works for Claude and VS Code sessions** — previously only searched Cursor sessions via FTS5. Now searches prompt text across all sources with direct matching, plus FTS5 for Cursor response text.
+- **Search results show prompt index** — each result displays `#N` so you can immediately run `promptrail diff <N>` or `promptrail rollback <N>`
+- **Search source label** — results were hardcoded to show `cursor`; now correctly shows `cursor` / `claude` / `vscode`
+- **SQLite experimental warning suppressed** — `node:sqlite` no longer prints `ExperimentalWarning` to stderr
+
+### Added
+- **Search by file name** — `promptrail search "auth.ts"` finds prompts that edited files matching the query (works in both CLI and extension sidebar)
+- **`--last` / `-n` flag for timeline** — `promptrail timeline -n 10` shows only the last N prompts. Default remains all.
+- **Landing page** — `docs/index.html` for GitHub Pages deployment
+- **Hero GIF** — terminal demo at `docs/hero.gif`, referenced in README
+
 ## [0.6.3] - 2026-03-13
 
 ### Added
@@ -128,7 +142,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/thisalihassan/promptrail/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/thisalihassan/promptrail/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/thisalihassan/promptrail/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/thisalihassan/promptrail/compare/v0.6.0...v0.6.1

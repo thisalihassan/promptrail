@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Promptrail — git blame, but for AI agents</title>
+<meta name="description" content="Prompt-level version control for AI code editing. See which prompt changed which files. Diff and rollback by intent.">
+<meta property="og:title" content="Promptrail — git blame, but for AI agents">
+<meta property="og:description" content="See which AI prompt changed which files. Diff and rollback by intent.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://promptrail.dev">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Promptrail — git blame, but for AI agents">
+<meta name="twitter:description" content="See which AI prompt changed which files. Diff and rollback by intent.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --surface: #141416;
+    --surface-2: #1c1c1f;
+    --border: #2a2a2d;
+    --text: #e4e4e7;
+    --text-dim: #71717a;
+    --text-muted: #52525b;
+    --accent: #3b82f6;
+    --accent-dim: rgba(59,130,246,0.15);
+    --green: #22c55e;
+    --green-dim: rgba(34,197,94,0.15);
+    --red: #ef4444;
+    --red-dim: rgba(239,68,68,0.12);
+    --yellow: #eab308;
+    --orange: #f97316;
+    --purple: #a855f7;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: rgba(10,10,11,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  nav .container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+  }
+
+  .nav-logo {
+    font-weight: 700;
+    font-size: 18px;
+    color: var(--text);
+    text-decoration: none;
+    letter-spacing: -0.3px;
+  }
+
+  .nav-logo span { color: var(--accent); }
+
+  .nav-links { display: flex; align-items: center; gap: 24px; }
+
+  .nav-links a {
+    font-size: 14px;
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  .nav-links a:hover { color: var(--text); }
+
+  .gh-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    text-decoration: none;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .gh-btn:hover { border-color: var(--text-muted); background: var(--border); }
+
+  .gh-btn svg { width: 16px; height: 16px; fill: var(--text); }
+
+  /* Hero */
+  .hero {
+    padding: 140px 0 80px;
+    text-align: center;
+  }
+
+  .hero-badge {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent);
+    background: var(--accent-dim);
+    padding: 4px 12px;
+    border-radius: 20px;
+    margin-bottom: 24px;
+    letter-spacing: 0.3px;
+  }
+
+  .hero h1 {
+    font-size: clamp(36px, 5vw, 56px);
+    font-weight: 800;
+    letter-spacing: -1.5px;
+    line-height: 1.1;
+    margin-bottom: 20px;
+    color: #fff;
+  }
+
+  .hero h1 .accent { color: var(--accent); }
+
+  .hero .subtitle {
+    font-size: 18px;
+    color: var(--text-dim);
+    max-width: 560px;
+    margin: 0 auto 36px;
+    line-height: 1.6;
+  }
+
+  .hero-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .install-box {
+    display: flex;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    gap: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    position: relative;
+  }
+
+  .install-box:hover { border-color: var(--text-muted); }
+
+  .install-box .dollar { color: var(--text-muted); }
+  .install-box .cmd { color: var(--green); }
+
+  .install-box .copy-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    transition: color 0.15s;
+  }
+
+  .install-box .copy-btn:hover { color: var(--text); }
+
+  .copy-toast {
+    position: absolute;
+    top: -32px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--green);
+    color: #000;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'Inter', sans-serif;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+  }
+
+  .copy-toast.show { opacity: 1; }
+
+  .primary-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    text-decoration: none;
+    transition: opacity 0.15s;
+    cursor: pointer;
+  }
+
+  .primary-btn:hover { opacity: 0.9; }
+
+  /* GIF Demo */
+  .demo-section {
+    padding: 20px 0 80px;
+    text-align: center;
+  }
+
+  .demo-wrapper {
+    max-width: 880px;
+    margin: 0 auto;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .demo-wrapper img {
+    width: 100%;
+    display: block;
+  }
+
+  .demo-placeholder {
+    padding: 120px 40px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .demo-placeholder .arrow { font-size: 24px; margin-bottom: 12px; display: block; }
+
+  /* Problem / Solution */
+  .problem-section {
+    padding: 80px 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .problem-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: start;
+  }
+
+  .problem-card, .solution-card {
+    padding: 32px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  .problem-card { background: var(--red-dim); }
+  .solution-card { background: var(--green-dim); }
+
+  .problem-card h3, .solution-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 20px;
+  }
+
+  .problem-card h3 { color: var(--red); }
+  .solution-card h3 { color: var(--green); }
+
+  .problem-card .scenario {
+    font-size: 14px;
+    color: var(--text-dim);
+    line-height: 1.8;
+  }
+
+  .problem-card .scenario strong { color: var(--text); }
+
+  .solution-card pre {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    overflow-x: auto;
+  }
+
+  .solution-card pre .prompt { color: var(--green); }
+  .solution-card pre .dot-green { color: var(--green); }
+  .solution-card pre .dot-dim { color: var(--text-muted); }
+  .solution-card pre .files { color: var(--green); font-weight: 500; }
+  .solution-card pre .dim { color: var(--text-muted); }
+  .solution-card pre .src { color: var(--accent); }
+
+  /* Features */
+  .features-section {
+    padding: 80px 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+    margin-bottom: 12px;
+    text-align: center;
+  }
+
+  .section-title {
+    font-size: 32px;
+    font-weight: 700;
+    color: #fff;
+    text-align: center;
+    margin-bottom: 48px;
+    letter-spacing: -0.5px;
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+
+  .feature-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    transition: border-color 0.15s;
+  }
+
+  .feature-card:hover { border-color: var(--text-muted); }
+
+  .feature-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    margin-bottom: 16px;
+  }
+
+  .feature-icon.blue { background: var(--accent-dim); }
+  .feature-icon.green { background: var(--green-dim); }
+  .feature-icon.red { background: var(--red-dim); }
+
+  .feature-card h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+
+  .feature-card p {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .feature-card code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: var(--surface-2);
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: var(--green);
+  }
+
+  /* How it works */
+  .how-section {
+    padding: 80px 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .how-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+  }
+
+  .how-step {
+    text-align: center;
+    padding: 32px 24px;
+  }
+
+  .step-number {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 15px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  .how-step h4 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+
+  .how-step p {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  /* Agents table */
+  .agents-section {
+    padding: 80px 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .agents-table {
+    max-width: 640px;
+    margin: 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .agents-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .agents-table th {
+    padding: 12px 20px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .agents-table td {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+
+  .agents-table tr:last-child td { border-bottom: none; }
+
+  .agents-table .check { color: var(--green); font-weight: 600; }
+
+  /* CTA */
+  .cta-section {
+    padding: 100px 0;
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+
+  .cta-section h2 {
+    font-size: 32px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 16px;
+    letter-spacing: -0.5px;
+  }
+
+  .cta-section p {
+    font-size: 16px;
+    color: var(--text-dim);
+    margin-bottom: 32px;
+  }
+
+  .cta-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  /* Footer */
+  footer {
+    padding: 32px 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+  }
+
+  footer p {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  footer a {
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  footer a:hover { color: var(--text); }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .problem-grid, .features-grid, .how-grid {
+      grid-template-columns: 1fr;
+    }
+    .hero h1 { font-size: 32px; }
+    .nav-links a:not(.gh-btn) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <a class="nav-logo" href="#">prompt<span>rail</span></a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#agents">Agents</a>
+      <a class="gh-btn" href="https://github.com/thisalihassan/promptrail" target="_blank">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        Star on GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge">Open Source &middot; CLI + Extension + Plugin</div>
+    <h1><span class="accent">git blame</span>, but for<br>AI coding agents</h1>
+    <p class="subtitle">See which prompt changed which files. View diffs and rollback by intent. Works with Cursor and Claude Code.</p>
+    <div class="hero-actions">
+      <div class="install-box" onclick="copyInstall()">
+        <span class="dollar">$</span>
+        <span class="cmd">npx promptrail timeline</span>
+        <button class="copy-btn" title="Copy">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3a1.5 1.5 0 011.5-1.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        </button>
+        <span class="copy-toast" id="copy-toast">Copied!</span>
+      </div>
+      <a class="primary-btn" href="https://github.com/thisalihassan/promptrail" target="_blank">
+        View on GitHub
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 3h7v7M13 3L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="demo-section">
+  <div class="container">
+    <div class="demo-wrapper">
+      <img src="hero.gif" alt="Promptrail demo — timeline, diff, and rollback">
+    </div>
+  </div>
+</section>
+
+<section class="problem-section" id="problem">
+  <div class="container">
+    <div class="problem-grid">
+      <div class="problem-card">
+        <h3>Without Promptrail</h3>
+        <div class="scenario">
+          <strong>You ask Cursor to refactor auth.</strong> It edits 4 files.<br><br>
+          <strong>You ask it to add error handling.</strong> 6 more files.<br><br>
+          <strong>Something breaks.</strong><br><br>
+          Git log shows one commit: <em>"AI changes"</em><br>
+          Cursor checkpoints: a flat list of file states.<br><br>
+          <strong>You have no idea which prompt caused which change.</strong>
+        </div>
+      </div>
+      <div class="solution-card">
+        <h3>With Promptrail</h3>
+<pre><span class="prompt">$ promptrail timeline --files</span>
+
+<span class="dot-green">●</span> <span class="dim">#0</span> <span class="src">cursor</span> Refactor auth middleware  <span class="files">4 files</span>
+      <span class="dim">src/middleware/auth.ts</span>
+      <span class="dim">src/routes/login.ts</span>
+      <span class="dim">src/routes/logout.ts</span>
+      <span class="dim">src/utils/token.ts</span>
+<span class="dot-green">●</span> <span class="dim">#1</span> <span class="src">cursor</span> Add error handling  <span class="files">6 files</span>
+      <span class="dim">src/middleware/error.ts</span>
+      <span class="dim">src/routes/api.ts</span>
+      <span class="dim">...</span>
+<span class="dot-dim">○</span> <span class="dim">#2</span> <span class="src">cursor</span> Why is the build failing?  <span class="dim">no changes</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="features-section" id="features">
+  <div class="container">
+    <div class="section-label">Features</div>
+    <h2 class="section-title">Everything you need to trace AI changes</h2>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon blue">&#9776;</div>
+        <h4>Prompt Timeline</h4>
+        <p>Every AI prompt listed with file change counts, model badges, and timestamps. <code>promptrail timeline</code></p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon blue">&#8644;</div>
+        <h4>Prompt-Scoped Diffs</h4>
+        <p>Before/after diffs scoped to a single prompt, not the whole session. <code>promptrail diff 3</code></p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">&#8634;</div>
+        <h4>Cherry-Pick Rollback</h4>
+        <p>Undo one prompt's changes without losing everything after it. <code>promptrail rollback 5</code></p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon blue">&#128270;</div>
+        <h4>Full-Text Search</h4>
+        <p>Search across all prompts and AI responses with FTS5. <code>promptrail search "auth"</code></p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">&#128172;</div>
+        <h4>View AI Responses</h4>
+        <p>Read the full AI reply for any prompt — text and tool calls. <code>promptrail response 3</code></p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon red">&#128736;</div>
+        <h4>Zero Config</h4>
+        <p>Reads existing session data on disk. No tagging, no buttons, no network calls. Just works.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="how-section" id="how">
+  <div class="container">
+    <div class="section-label">How It Works</div>
+    <h2 class="section-title">No interception. No configuration.</h2>
+    <div class="how-grid">
+      <div class="how-step">
+        <div class="step-number">1</div>
+        <h4>Use AI normally</h4>
+        <p>Write prompts in Cursor or Claude Code as you always do. Nothing to set up.</p>
+      </div>
+      <div class="how-step">
+        <div class="step-number">2</div>
+        <h4>Sessions are read automatically</h4>
+        <p>Promptrail reads Cursor's SQLite database and Claude Code's JSONL session files. Everything stays local.</p>
+      </div>
+      <div class="how-step">
+        <div class="step-number">3</div>
+        <h4>Browse, diff, rollback</h4>
+        <p>Use the CLI, the Cursor extension sidebar, or the Claude Code plugin to trace every change.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="agents-section" id="agents">
+  <div class="container">
+    <div class="section-label">Compatibility</div>
+    <h2 class="section-title">Works where you work</h2>
+    <div class="agents-table">
+      <table>
+        <tr>
+          <th>Feature</th>
+          <th>Cursor</th>
+          <th>Claude Code</th>
+        </tr>
+        <tr>
+          <td>Prompt timeline</td>
+          <td class="check">Yes</td>
+          <td class="check">Yes</td>
+        </tr>
+        <tr>
+          <td>Real timestamps</td>
+          <td class="check">Yes</td>
+          <td class="check">Yes</td>
+        </tr>
+        <tr>
+          <td>File attribution</td>
+          <td class="check">Yes</td>
+          <td class="check">Yes</td>
+        </tr>
+        <tr>
+          <td>Before/after diffs</td>
+          <td class="check">Full snapshots</td>
+          <td>Edit-level hunks</td>
+        </tr>
+        <tr>
+          <td>Cherry-pick rollback</td>
+          <td class="check">Yes</td>
+          <td class="check">Yes</td>
+        </tr>
+        <tr>
+          <td>AI response viewer</td>
+          <td class="check">Yes</td>
+          <td class="check">Yes</td>
+        </tr>
+        <tr>
+          <td>Full-text search</td>
+          <td class="check">Yes</td>
+          <td class="check">Yes</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="cta-section">
+  <div class="container">
+    <h2>Try it in 10 seconds</h2>
+    <p>If you've used Cursor or Claude Code on your project, your timeline is already there.</p>
+    <div class="cta-actions">
+      <div class="install-box" onclick="copyInstall()">
+        <span class="dollar">$</span>
+        <span class="cmd">npx promptrail timeline</span>
+        <button class="copy-btn" title="Copy">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3a1.5 1.5 0 011.5-1.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        </button>
+        <span class="copy-toast" id="copy-toast-2">Copied!</span>
+      </div>
+      <a class="gh-btn" href="https://github.com/thisalihassan/promptrail" target="_blank">
+        <svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" fill="currentColor"/></svg>
+        Star on GitHub
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>
+      MIT Licensed &middot;
+      <a href="https://github.com/thisalihassan/promptrail">GitHub</a> &middot;
+      <a href="https://www.npmjs.com/package/promptrail">npm</a> &middot;
+      <a href="https://open-vsx.org/extension/thisalihassan/promptrail">Extension</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+function copyInstall() {
+  navigator.clipboard.writeText('npx promptrail timeline');
+  document.querySelectorAll('.copy-toast').forEach(el => {
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 1500);
+  });
+}
+</script>
+</body>
+</html>

@@ -14,5 +14,6 @@ claude-plugin/
 *.map
 tsconfig.json
 esbuild.mjs
+docs/
 CONTRIBUTING.md
 PUBLISHING.md

@@ -133,7 +133,10 @@ function getCursorDbPath(): string {
 
 let DatabaseSync: any;
 try {
+  const _ew = process.emitWarning;
+  process.emitWarning = (() => {}) as any;
   DatabaseSync = require("node:sqlite").DatabaseSync;
+  process.emitWarning = _ew;
 } catch {
   DatabaseSync = undefined;
 }

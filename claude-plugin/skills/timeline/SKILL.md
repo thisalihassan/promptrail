@@ -12,8 +12,10 @@ Run the `promptrail` CLI from the project root:
 promptrail timeline --files --source claude
 ```
 
-Optional filter:
+Optional flags:
+- `-n <count>` or `--last <count>` — show only the last N prompts (e.g. `-n 10`)
 - `--model <substring>` — filter by model name (e.g. `--model sonnet`)
+- Example: `promptrail timeline --files --source claude -n 10`
 - Example: `promptrail timeline --files --source claude --model sonnet`
 
 Pass `--source claude` to show only Claude Code prompts.
