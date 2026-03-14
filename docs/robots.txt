@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://thisalihassan.github.io/promptrail/sitemap.xml
