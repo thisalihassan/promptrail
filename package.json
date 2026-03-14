@@ -4,7 +4,7 @@
   "description": "See what every AI prompt changed. Reads Claude Code and Cursor sessions automatically. Browse, diff, and rollback by intent.",
   "version": "0.6.4",
   "publisher": "thisalihassan",
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thisalihassan/promptrail.git"
