@@ -8,530 +8,339 @@
 <meta property="og:title" content="Promptrail — git blame, but for AI agents">
 <meta property="og:description" content="See which AI prompt changed which files. Diff and rollback by intent.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://promptrail.dev">
+<meta property="og:url" content="https://thisalihassan.github.io/promptrail/">
+<meta property="og:image" content="https://raw.githubusercontent.com/thisalihassan/promptrail/master/docs/hero.gif">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Promptrail — git blame, but for AI agents">
 <meta name="twitter:description" content="See which AI prompt changed which files. Diff and rollback by intent.">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/thisalihassan/promptrail/master/docs/hero.gif">
+<meta name="keywords" content="AI version control, prompt tracking, cursor, claude code, git blame AI, rollback AI changes, vibe coding, AI coding agent, diff, developer tools">
+<meta name="author" content="thisalihassan">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://thisalihassan.github.io/promptrail/">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Promptrail","description":"Prompt-level version control for AI code editing. See which prompt changed which files. Diff and rollback by intent.","url":"https://thisalihassan.github.io/promptrail/","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux, Windows","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"thisalihassan","url":"https://github.com/thisalihassan"}}
+</script>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 19C4 19 7 13 10 10C13 7 14 9 16 6C18 3 20 2 22 3' stroke='%236366f1' stroke-width='1.5' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='10' cy='10' r='2.5' fill='%236366f1'/%3E%3Ccircle cx='16' cy='6' r='2.5' fill='%2306b6d4'/%3E%3Ccircle cx='4' cy='19' r='1.5' fill='%236366f1' opacity='.5'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #0a0a0b;
-    --surface: #141416;
-    --surface-2: #1c1c1f;
-    --border: #2a2a2d;
-    --text: #e4e4e7;
-    --text-dim: #71717a;
-    --text-muted: #52525b;
-    --accent: #3b82f6;
-    --accent-dim: rgba(59,130,246,0.15);
-    --green: #22c55e;
-    --green-dim: rgba(34,197,94,0.15);
-    --red: #ef4444;
-    --red-dim: rgba(239,68,68,0.12);
-    --yellow: #eab308;
-    --orange: #f97316;
-    --purple: #a855f7;
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:auto}
+
+  body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+    background:#050507;
+    color:#c4c4cc;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
   }
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  ::selection{background:rgba(99,102,241,.4);color:#fff}
 
-  html { scroll-behavior: smooth; }
-
-  body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
+  /* Animated mesh background */
+  .mesh-bg{
+    position:fixed;inset:0;z-index:-1;overflow:hidden;
+  }
+  .mesh-bg .orb{
+    position:absolute;border-radius:50%;filter:blur(120px);opacity:.15;
+    animation:float 20s ease-in-out infinite;
+  }
+  .mesh-bg .orb:nth-child(1){width:600px;height:600px;background:#6366f1;top:-10%;left:-5%;animation-delay:0s}
+  .mesh-bg .orb:nth-child(2){width:500px;height:500px;background:#06b6d4;top:30%;right:-10%;animation-delay:-7s}
+  .mesh-bg .orb:nth-child(3){width:400px;height:400px;background:#8b5cf6;bottom:-5%;left:30%;animation-delay:-14s}
+  @keyframes float{
+    0%,100%{transform:translate(0,0) scale(1)}
+    33%{transform:translate(30px,-40px) scale(1.05)}
+    66%{transform:translate(-20px,30px) scale(.95)}
   }
 
-  .container { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .container{max-width:1100px;margin:0 auto;padding:0 24px}
 
   /* Nav */
-  nav {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 100;
-    background: rgba(10,10,11,0.85);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
+  nav{
+    position:fixed;top:0;left:0;right:0;z-index:100;
+    background:rgba(5,5,7,.7);backdrop-filter:blur(16px) saturate(1.5);
+    border-bottom:1px solid rgba(255,255,255,.06);
   }
-
-  nav .container {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 56px;
+  nav .container{display:flex;align-items:center;justify-content:space-between;height:56px}
+  .nav-logo{font-weight:800;font-size:17px;color:#fff;text-decoration:none;letter-spacing:-.5px}
+  .nav-logo span{
+    background:linear-gradient(135deg,#6366f1,#06b6d4);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
   }
-
-  .nav-logo {
-    font-weight: 700;
-    font-size: 18px;
-    color: var(--text);
-    text-decoration: none;
-    letter-spacing: -0.3px;
+  .nav-links{display:flex;align-items:center;gap:20px}
+  .nav-links a{font-size:13px;color:#71717a;text-decoration:none;transition:color .15s}
+  .nav-links a:hover{color:#e4e4e7}
+  .gh-btn{
+    display:inline-flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;font-weight:600;
+    color:#e4e4e7;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);
+    border-radius:8px;text-decoration:none;transition:all .2s;
   }
-
-  .nav-logo span { color: var(--accent); }
-
-  .nav-links { display: flex; align-items: center; gap: 24px; }
-
-  .nav-links a {
-    font-size: 14px;
-    color: var(--text-dim);
-    text-decoration: none;
-    transition: color 0.15s;
-  }
-
-  .nav-links a:hover { color: var(--text); }
-
-  .gh-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    text-decoration: none;
-    transition: border-color 0.15s, background 0.15s;
-  }
-
-  .gh-btn:hover { border-color: var(--text-muted); background: var(--border); }
-
-  .gh-btn svg { width: 16px; height: 16px; fill: var(--text); }
+  .gh-btn:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.15)}
+  .gh-btn svg{width:15px;height:15px;fill:#e4e4e7}
 
   /* Hero */
-  .hero {
-    padding: 140px 0 80px;
-    text-align: center;
+  .hero{padding:160px 0 60px;text-align:center;position:relative}
+  .hero-badge{
+    display:inline-flex;align-items:center;gap:6px;
+    font-size:12px;font-weight:500;color:#a5b4fc;
+    background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.2);
+    padding:5px 14px;border-radius:100px;margin-bottom:28px;
   }
+  .hero-badge .dot{width:6px;height:6px;border-radius:50%;background:#6366f1;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-  .hero-badge {
-    display: inline-block;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--accent);
-    background: var(--accent-dim);
-    padding: 4px 12px;
-    border-radius: 20px;
-    margin-bottom: 24px;
-    letter-spacing: 0.3px;
+  .hero h1{
+    font-size:clamp(40px,6vw,72px);font-weight:900;letter-spacing:-2.5px;
+    line-height:1.05;margin-bottom:24px;color:#fff;
   }
-
-  .hero h1 {
-    font-size: clamp(36px, 5vw, 56px);
-    font-weight: 800;
-    letter-spacing: -1.5px;
-    line-height: 1.1;
-    margin-bottom: 20px;
-    color: #fff;
+  .hero h1 .grad{
+    background:linear-gradient(135deg,#818cf8 0%,#06b6d4 50%,#34d399 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
   }
-
-  .hero h1 .accent { color: var(--accent); }
-
-  .hero .subtitle {
-    font-size: 18px;
-    color: var(--text-dim);
-    max-width: 560px;
-    margin: 0 auto 36px;
-    line-height: 1.6;
+  .hero .subtitle{
+    font-size:17px;color:#71717a;max-width:520px;margin:0 auto 40px;line-height:1.7;
+    font-weight:400;
   }
+  .hero-actions{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}
 
-  .hero-actions {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    flex-wrap: wrap;
+  .install-box{
+    display:flex;align-items:center;
+    background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);
+    border-radius:10px;padding:11px 16px;
+    font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:500;
+    gap:10px;cursor:pointer;transition:all .2s;position:relative;
   }
-
-  .install-box {
-    display: flex;
-    align-items: center;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 16px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 14px;
-    gap: 12px;
-    cursor: pointer;
-    transition: border-color 0.15s;
-    position: relative;
+  .install-box:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14)}
+  .install-box .dollar{color:#52525b}
+  .install-box .cmd{color:#34d399}
+  .install-box .copy-btn{
+    background:none;border:none;color:#52525b;cursor:pointer;padding:2px;display:flex;transition:color .15s;
   }
-
-  .install-box:hover { border-color: var(--text-muted); }
-
-  .install-box .dollar { color: var(--text-muted); }
-  .install-box .cmd { color: var(--green); }
-
-  .install-box .copy-btn {
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    cursor: pointer;
-    padding: 2px;
-    display: flex;
-    transition: color 0.15s;
+  .install-box .copy-btn:hover{color:#e4e4e7}
+  .copy-toast{
+    position:absolute;top:-36px;left:50%;transform:translateX(-50%);
+    background:#34d399;color:#000;padding:4px 12px;border-radius:6px;font-size:11px;
+    font-family:'Inter',sans-serif;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;
   }
-
-  .install-box .copy-btn:hover { color: var(--text); }
-
-  .copy-toast {
-    position: absolute;
-    top: -32px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--green);
-    color: #000;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-family: 'Inter', sans-serif;
-    opacity: 0;
-    transition: opacity 0.2s;
-    pointer-events: none;
+  .copy-toast.show{opacity:1}
+  .primary-btn{
+    display:inline-flex;align-items:center;gap:8px;padding:11px 24px;font-size:13px;font-weight:600;
+    color:#fff;background:linear-gradient(135deg,#6366f1,#4f46e5);border:none;border-radius:10px;
+    text-decoration:none;transition:all .2s;cursor:pointer;box-shadow:0 0 20px rgba(99,102,241,.3);
   }
+  .primary-btn:hover{box-shadow:0 0 30px rgba(99,102,241,.5);transform:translateY(-1px)}
 
-  .copy-toast.show { opacity: 1; }
-
-  .primary-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 24px;
-    font-size: 14px;
-    font-weight: 600;
-    color: #fff;
-    background: var(--accent);
-    border: none;
-    border-radius: 8px;
-    text-decoration: none;
-    transition: opacity 0.15s;
-    cursor: pointer;
+  /* Terminal demo */
+  .demo-section{padding:20px 0 100px}
+  .terminal{
+    max-width:960px;margin:0 auto;border-radius:14px;position:relative;
+    background:#0c0c0f;
+    box-shadow:0 0 0 1px rgba(255,255,255,.06),0 20px 60px -10px rgba(0,0,0,.7),0 0 80px rgba(99,102,241,.08);
   }
-
-  .primary-btn:hover { opacity: 0.9; }
-
-  /* GIF Demo */
-  .demo-section {
-    padding: 20px 0 80px;
-    text-align: center;
+  .terminal-bar{
+    display:flex;align-items:center;gap:8px;padding:14px 18px;
+    background:rgba(255,255,255,.03);border-bottom:1px solid rgba(255,255,255,.06);
   }
-
-  .demo-wrapper {
-    max-width: 880px;
-    margin: 0 auto;
-    border-radius: 12px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    background: var(--surface);
+  .terminal-dot{width:12px;height:12px;border-radius:50%}
+  .terminal-dot.r{background:#ff5f57}
+  .terminal-dot.y{background:#febc2e}
+  .terminal-dot.g{background:#28c840}
+  .terminal-title{
+    flex:1;text-align:center;font-size:12px;color:#52525b;
+    font-family:'JetBrains Mono',monospace;font-weight:500;
   }
+  .terminal img{width:100%;display:block;border-radius:0 0 14px 14px}
 
-  .demo-wrapper img {
-    width: 100%;
-    display: block;
+  /* Section animations */
+  .reveal{opacity:0;transition:opacity .7s cubic-bezier(.16,1,.3,1)}
+  .reveal.visible{opacity:1}
+
+  /* Before/After */
+  .compare-section{padding:100px 0}
+  .compare-label{
+    font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;
+    text-align:center;margin-bottom:12px;
+    background:linear-gradient(135deg,#818cf8,#06b6d4);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
   }
-
-  .demo-placeholder {
-    padding: 120px 40px;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 14px;
-    font-family: 'JetBrains Mono', monospace;
+  .compare-title{
+    font-size:clamp(24px,3.5vw,36px);font-weight:800;color:#fff;text-align:center;
+    margin-bottom:56px;letter-spacing:-1px;
   }
+  .compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:stretch}
 
-  .demo-placeholder .arrow { font-size: 24px; margin-bottom: 12px; display: block; }
-
-  /* Problem / Solution */
-  .problem-section {
-    padding: 80px 0;
-    border-top: 1px solid var(--border);
+  .compare-card{
+    border-radius:16px;padding:36px;position:relative;overflow:hidden;
+    border:1px solid rgba(255,255,255,.06);
   }
-
-  .problem-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 40px;
-    align-items: start;
+  .compare-card.before{background:rgba(239,68,68,.04)}
+  .compare-card.before::before{
+    content:'';position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,#ef4444,transparent);
   }
-
-  .problem-card, .solution-card {
-    padding: 32px;
-    border-radius: 12px;
-    border: 1px solid var(--border);
+  .compare-card.after{background:rgba(34,211,153,.04)}
+  .compare-card.after::before{
+    content:'';position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,#34d399,transparent);
   }
-
-  .problem-card { background: var(--red-dim); }
-  .solution-card { background: var(--green-dim); }
-
-  .problem-card h3, .solution-card h3 {
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 20px;
+  .compare-card h3{
+    font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:24px;
   }
-
-  .problem-card h3 { color: var(--red); }
-  .solution-card h3 { color: var(--green); }
-
-  .problem-card .scenario {
-    font-size: 14px;
-    color: var(--text-dim);
-    line-height: 1.8;
+  .compare-card.before h3{color:#f87171}
+  .compare-card.after h3{color:#34d399}
+  .compare-card .scenario{font-size:14px;color:#71717a;line-height:2}
+  .compare-card .scenario strong{color:#a1a1aa}
+  .compare-card pre{
+    font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.8;
+    color:#71717a;white-space:pre-wrap;
   }
+  .compare-card pre .p{color:#34d399}.compare-card pre .g{color:#34d399;font-weight:600}
+  .compare-card pre .d{color:#3f3f46}.compare-card pre .b{color:#818cf8}
 
-  .problem-card .scenario strong { color: var(--text); }
-
-  .solution-card pre {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    line-height: 1.7;
-    color: var(--text-dim);
-    white-space: pre-wrap;
-    overflow-x: auto;
+  /* Bento features */
+  .bento-section{padding:100px 0}
+  .bento-grid{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    grid-template-rows:auto auto;
+    gap:16px;
   }
-
-  .solution-card pre .prompt { color: var(--green); }
-  .solution-card pre .dot-green { color: var(--green); }
-  .solution-card pre .dot-dim { color: var(--text-muted); }
-  .solution-card pre .files { color: var(--green); font-weight: 500; }
-  .solution-card pre .dim { color: var(--text-muted); }
-  .solution-card pre .src { color: var(--accent); }
-
-  /* Features */
-  .features-section {
-    padding: 80px 0;
-    border-top: 1px solid var(--border);
+  .bento-card{
+    border-radius:16px;padding:32px;position:relative;overflow:hidden;
+    background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);
+    transition:all .3s;
   }
-
-  .section-label {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--accent);
-    margin-bottom: 12px;
-    text-align: center;
+  .bento-card:hover{
+    background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.1);
+    transform:translateY(-2px);
   }
-
-  .section-title {
-    font-size: 32px;
-    font-weight: 700;
-    color: #fff;
-    text-align: center;
-    margin-bottom: 48px;
-    letter-spacing: -0.5px;
+  .bento-card.wide{grid-column:span 2}
+  .bento-card .icon{
+    width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+    font-size:20px;margin-bottom:20px;
   }
-
-  .features-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
-  }
-
-  .feature-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 28px;
-    transition: border-color 0.15s;
-  }
-
-  .feature-card:hover { border-color: var(--text-muted); }
-
-  .feature-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    margin-bottom: 16px;
-  }
-
-  .feature-icon.blue { background: var(--accent-dim); }
-  .feature-icon.green { background: var(--green-dim); }
-  .feature-icon.red { background: var(--red-dim); }
-
-  .feature-card h4 {
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 8px;
-    color: #fff;
-  }
-
-  .feature-card p {
-    font-size: 13px;
-    color: var(--text-dim);
-    line-height: 1.6;
-  }
-
-  .feature-card code {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    background: var(--surface-2);
-    padding: 2px 6px;
-    border-radius: 3px;
-    color: var(--green);
+  .bento-card .icon.indigo{background:rgba(99,102,241,.12)}
+  .bento-card .icon.emerald{background:rgba(52,211,153,.12)}
+  .bento-card .icon.amber{background:rgba(251,191,36,.12)}
+  .bento-card h4{font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;letter-spacing:-.3px}
+  .bento-card p{font-size:13px;color:#71717a;line-height:1.7}
+  .bento-card code{
+    font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:500;
+    background:rgba(99,102,241,.1);color:#a5b4fc;padding:2px 8px;border-radius:4px;
   }
 
   /* How it works */
-  .how-section {
-    padding: 80px 0;
-    border-top: 1px solid var(--border);
+  .how-section{padding:100px 0}
+  .how-steps{
+    display:flex;gap:0;max-width:800px;margin:0 auto;position:relative;
   }
-
-  .how-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
+  .how-steps::before{
+    content:'';position:absolute;top:22px;left:calc(16.66%);right:calc(16.66%);
+    height:2px;background:linear-gradient(90deg,#6366f1,#06b6d4,#34d399);opacity:.3;
   }
-
-  .how-step {
-    text-align: center;
-    padding: 32px 24px;
+  .how-step{flex:1;text-align:center;padding:0 16px;position:relative}
+  .step-ring{
+    width:44px;height:44px;border-radius:50%;margin:0 auto 20px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:16px;font-weight:800;color:#fff;position:relative;z-index:1;
   }
+  .step-ring.s1{background:linear-gradient(135deg,#6366f1,#4f46e5)}
+  .step-ring.s2{background:linear-gradient(135deg,#0891b2,#06b6d4)}
+  .step-ring.s3{background:linear-gradient(135deg,#059669,#34d399)}
+  .how-step h4{font-size:14px;font-weight:700;color:#fff;margin-bottom:6px}
+  .how-step p{font-size:12px;color:#52525b;line-height:1.6}
 
-  .step-number {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: var(--accent-dim);
-    color: var(--accent);
-    font-size: 15px;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 16px;
+  /* Agents */
+  .agents-section{padding:100px 0}
+  .agents-table{
+    max-width:640px;margin:0 auto;border-radius:16px;overflow:hidden;
+    border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02);
   }
-
-  .how-step h4 {
-    font-size: 15px;
-    font-weight: 600;
-    color: #fff;
-    margin-bottom: 8px;
+  .agents-table table{width:100%;border-collapse:collapse;font-size:13px}
+  .agents-table th{
+    padding:14px 20px;text-align:left;font-size:10px;font-weight:700;
+    text-transform:uppercase;letter-spacing:1px;color:#52525b;
+    background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06);
   }
-
-  .how-step p {
-    font-size: 13px;
-    color: var(--text-dim);
-    line-height: 1.6;
-  }
-
-  /* Agents table */
-  .agents-section {
-    padding: 80px 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .agents-table {
-    max-width: 640px;
-    margin: 0 auto;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-
-  .agents-table table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-  }
-
-  .agents-table th {
-    padding: 12px 20px;
-    text-align: left;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-dim);
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-  }
-
-  .agents-table td {
-    padding: 10px 20px;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-dim);
-  }
-
-  .agents-table tr:last-child td { border-bottom: none; }
-
-  .agents-table .check { color: var(--green); font-weight: 600; }
+  .agents-table td{padding:11px 20px;border-bottom:1px solid rgba(255,255,255,.04);color:#71717a}
+  .agents-table tr:last-child td{border-bottom:none}
+  .agents-table .y{color:#34d399;font-weight:600}
 
   /* CTA */
-  .cta-section {
-    padding: 100px 0;
-    text-align: center;
-    border-top: 1px solid var(--border);
+  .cta-section{padding:120px 0;text-align:center;position:relative}
+  .cta-section::before{
+    content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    width:600px;height:600px;border-radius:50%;
+    background:radial-gradient(circle,rgba(99,102,241,.08),transparent 70%);
+    pointer-events:none;
   }
-
-  .cta-section h2 {
-    font-size: 32px;
-    font-weight: 700;
-    color: #fff;
-    margin-bottom: 16px;
-    letter-spacing: -0.5px;
+  .cta-section h2{
+    font-size:clamp(28px,4vw,44px);font-weight:900;color:#fff;margin-bottom:16px;letter-spacing:-1.5px;
   }
-
-  .cta-section p {
-    font-size: 16px;
-    color: var(--text-dim);
-    margin-bottom: 32px;
-  }
-
-  .cta-actions {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
+  .cta-section p{font-size:15px;color:#52525b;margin-bottom:36px}
+  .cta-actions{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}
 
   /* Footer */
-  footer {
-    padding: 32px 0;
-    border-top: 1px solid var(--border);
-    text-align: center;
+  footer{padding:32px 0;border-top:1px solid rgba(255,255,255,.04);text-align:center}
+  footer p{font-size:12px;color:#3f3f46}
+  footer a{color:#52525b;text-decoration:none;transition:color .15s}
+  footer a:hover{color:#a1a1aa}
+
+  @media(max-width:1024px){
+    .container{padding:0 20px}
+    .bento-grid{grid-template-columns:1fr 1fr}
+    .bento-card.wide{grid-column:span 2}
+    .compare-grid{gap:20px}
+    .terminal{max-width:100%}
   }
 
-  footer p {
-    font-size: 13px;
-    color: var(--text-muted);
+  @media(max-width:768px){
+    .compare-grid,.bento-grid{grid-template-columns:1fr}
+    .bento-card.wide{grid-column:span 1}
+    .how-steps{flex-direction:column;gap:32px}
+    .how-steps::before{display:none}
+    .hero{padding:120px 0 40px}
+    .hero h1{font-size:32px;letter-spacing:-1px}
+    .hero .subtitle{font-size:15px}
+    .compare-title{font-size:24px;margin-bottom:36px}
+    .compare-card{padding:24px}
+    .bento-card{padding:24px}
+    .compare-section,.bento-section,.how-section,.agents-section{padding:64px 0}
+    .cta-section{padding:80px 0}
+    .nav-links a:not(.gh-btn){display:none}
+    .install-box{font-size:12px;padding:10px 12px}
+    .agents-table{margin:0 -8px;border-radius:12px}
+    .agents-table th,.agents-table td{padding:10px 12px;font-size:12px}
   }
 
-  footer a {
-    color: var(--text-dim);
-    text-decoration: none;
-    transition: color 0.15s;
+  @media(max-width:400px){
+    .hero h1{font-size:28px}
+    .hero-badge{font-size:11px;padding:4px 10px}
+    .hero-actions{flex-direction:column;gap:10px}
+    .install-box{width:100%;justify-content:center}
+    .primary-btn{width:100%;justify-content:center}
+    .compare-card pre{font-size:10px}
+    .cta-actions{flex-direction:column;gap:10px}
+    .cta-actions .install-box,.cta-actions .gh-btn{width:100%;justify-content:center}
   }
 
-  footer a:hover { color: var(--text); }
-
-  /* Responsive */
-  @media (max-width: 768px) {
-    .problem-grid, .features-grid, .how-grid {
-      grid-template-columns: 1fr;
-    }
-    .hero h1 { font-size: 32px; }
-    .nav-links a:not(.gh-btn) { display: none; }
+  @media(hover:none){
+    .bento-card:hover{transform:none}
+    .primary-btn:hover{transform:none}
   }
 </style>
 </head>
 <body>
+
+<div class="mesh-bg">
+  <div class="orb"></div>
+  <div class="orb"></div>
+  <div class="orb"></div>
+</div>
 
 <nav>
   <div class="container">
@@ -542,7 +351,7 @@
       <a href="#agents">Agents</a>
       <a class="gh-btn" href="https://github.com/thisalihassan/promptrail" target="_blank">
         <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        Star on GitHub
+        Star
       </a>
     </div>
   </div>
@@ -550,21 +359,21 @@
 
 <section class="hero">
   <div class="container">
-    <div class="hero-badge">Open Source &middot; CLI + Extension + Plugin</div>
-    <h1><span class="accent">git blame</span>, but for<br>AI coding agents</h1>
+    <div class="hero-badge"><span class="dot"></span> Open Source &middot; CLI + Extension + Plugin</div>
+    <h1><span class="grad">git blame</span>, but for<br>AI coding agents</h1>
     <p class="subtitle">See which prompt changed which files. View diffs and rollback by intent. Works with Cursor and Claude Code.</p>
     <div class="hero-actions">
       <div class="install-box" onclick="copyInstall()">
         <span class="dollar">$</span>
         <span class="cmd">npx promptrail timeline</span>
-        <button class="copy-btn" title="Copy">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3a1.5 1.5 0 011.5-1.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <button class="copy-btn" title="Copy to clipboard">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3a1.5 1.5 0 011.5-1.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
         </button>
-        <span class="copy-toast" id="copy-toast">Copied!</span>
+        <span class="copy-toast" id="ct1">Copied!</span>
       </div>
       <a class="primary-btn" href="https://github.com/thisalihassan/promptrail" target="_blank">
         View on GitHub
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 3h7v7M13 3L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 3h7v7M13 3L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </a>
     </div>
   </div>
@@ -572,174 +381,140 @@
 
 <section class="demo-section">
   <div class="container">
-    <div class="demo-wrapper">
+    <div class="terminal">
+      <div class="terminal-bar">
+        <div class="terminal-dot r"></div>
+        <div class="terminal-dot y"></div>
+        <div class="terminal-dot g"></div>
+        <div class="terminal-title">promptrail &mdash; zsh</div>
+        <div style="width:36px"></div>
+      </div>
       <img src="hero.gif" alt="Promptrail demo — timeline, diff, and rollback">
     </div>
   </div>
 </section>
 
-<section class="problem-section" id="problem">
+<section class="compare-section reveal" id="problem">
   <div class="container">
-    <div class="problem-grid">
-      <div class="problem-card">
+    <div class="compare-label">The Problem</div>
+    <h2 class="compare-title">Your AI agent edited 47 files.<br>Do you know why?</h2>
+    <div class="compare-grid">
+      <div class="compare-card before">
         <h3>Without Promptrail</h3>
         <div class="scenario">
-          <strong>You ask Cursor to refactor auth.</strong> It edits 4 files.<br><br>
-          <strong>You ask it to add error handling.</strong> 6 more files.<br><br>
+          <strong>You ask Cursor to refactor auth.</strong> It edits 4 files.<br>
+          <strong>You ask it to add error handling.</strong> 6 more files.<br>
           <strong>Something breaks.</strong><br><br>
           Git log shows one commit: <em>"AI changes"</em><br>
           Cursor checkpoints: a flat list of file states.<br><br>
-          <strong>You have no idea which prompt caused which change.</strong>
+          <strong>Which prompt caused which change? No idea.</strong>
         </div>
       </div>
-      <div class="solution-card">
+      <div class="compare-card after">
         <h3>With Promptrail</h3>
-<pre><span class="prompt">$ promptrail timeline --files</span>
+<pre><span class="p">$ promptrail timeline --files</span>
 
-<span class="dot-green">●</span> <span class="dim">#0</span> <span class="src">cursor</span> Refactor auth middleware  <span class="files">4 files</span>
-      <span class="dim">src/middleware/auth.ts</span>
-      <span class="dim">src/routes/login.ts</span>
-      <span class="dim">src/routes/logout.ts</span>
-      <span class="dim">src/utils/token.ts</span>
-<span class="dot-green">●</span> <span class="dim">#1</span> <span class="src">cursor</span> Add error handling  <span class="files">6 files</span>
-      <span class="dim">src/middleware/error.ts</span>
-      <span class="dim">src/routes/api.ts</span>
-      <span class="dim">...</span>
-<span class="dot-dim">○</span> <span class="dim">#2</span> <span class="src">cursor</span> Why is the build failing?  <span class="dim">no changes</span></pre>
+<span class="g">&#9679;</span> <span class="d">#0</span> <span class="b">cursor</span> Refactor auth middleware  <span class="g">4 files</span>
+      <span class="d">src/middleware/auth.ts</span>
+      <span class="d">src/routes/login.ts</span>
+      <span class="d">src/routes/logout.ts</span>
+      <span class="d">src/utils/token.ts</span>
+<span class="g">&#9679;</span> <span class="d">#1</span> <span class="b">cursor</span> Add error handling  <span class="g">6 files</span>
+      <span class="d">src/middleware/error.ts</span>
+      <span class="d">src/routes/api.ts</span>
+      <span class="d">...</span>
+<span class="d">&#9675;</span> <span class="d">#2</span> <span class="b">cursor</span> Why is the build failing?  <span class="d">no changes</span></pre>
       </div>
     </div>
   </div>
 </section>
 
-<section class="features-section" id="features">
+<section class="bento-section reveal" id="features">
   <div class="container">
-    <div class="section-label">Features</div>
-    <h2 class="section-title">Everything you need to trace AI changes</h2>
-    <div class="features-grid">
-      <div class="feature-card">
-        <div class="feature-icon blue">&#9776;</div>
+    <div class="compare-label">Features</div>
+    <h2 class="compare-title">Everything you need to trace AI changes</h2>
+    <div class="bento-grid">
+      <div class="bento-card wide">
+        <div class="icon indigo">&#9776;</div>
         <h4>Prompt Timeline</h4>
-        <p>Every AI prompt listed with file change counts, model badges, and timestamps. <code>promptrail timeline</code></p>
+        <p>Every AI prompt listed chronologically with file change counts, model badges, and timestamps. Filter by source, model, or limit with <code>-n 10</code>. Each prompt shows exactly which files it touched.</p>
       </div>
-      <div class="feature-card">
-        <div class="feature-icon blue">&#8644;</div>
-        <h4>Prompt-Scoped Diffs</h4>
-        <p>Before/after diffs scoped to a single prompt, not the whole session. <code>promptrail diff 3</code></p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon green">&#8634;</div>
+      <div class="bento-card">
+        <div class="icon emerald">&#8634;</div>
         <h4>Cherry-Pick Rollback</h4>
         <p>Undo one prompt's changes without losing everything after it. <code>promptrail rollback 5</code></p>
       </div>
-      <div class="feature-card">
-        <div class="feature-icon blue">&#128270;</div>
-        <h4>Full-Text Search</h4>
-        <p>Search across all prompts and AI responses with FTS5. <code>promptrail search "auth"</code></p>
+      <div class="bento-card">
+        <div class="icon indigo">&#8644;</div>
+        <h4>Prompt-Scoped Diffs</h4>
+        <p>Before/after diffs scoped to a single prompt, not the whole session. <code>promptrail diff 3</code></p>
       </div>
-      <div class="feature-card">
-        <div class="feature-icon green">&#128172;</div>
-        <h4>View AI Responses</h4>
-        <p>Read the full AI reply for any prompt — text and tool calls. <code>promptrail response 3</code></p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon red">&#128736;</div>
-        <h4>Zero Config</h4>
-        <p>Reads existing session data on disk. No tagging, no buttons, no network calls. Just works.</p>
+      <div class="bento-card wide">
+        <div class="icon amber">&#128270;</div>
+        <h4>Search Everything</h4>
+        <p>Full-text search across prompts, AI responses, and file names. Find which prompt edited <code>auth.ts</code> or mentioned "database optimization". Results show <code>#N</code> so you can immediately diff or rollback.</p>
       </div>
     </div>
   </div>
 </section>
 
-<section class="how-section" id="how">
+<section class="how-section reveal" id="how">
   <div class="container">
-    <div class="section-label">How It Works</div>
-    <h2 class="section-title">No interception. No configuration.</h2>
-    <div class="how-grid">
+    <div class="compare-label">How It Works</div>
+    <h2 class="compare-title">No interception. No configuration.</h2>
+    <div class="how-steps">
       <div class="how-step">
-        <div class="step-number">1</div>
+        <div class="step-ring s1">1</div>
         <h4>Use AI normally</h4>
-        <p>Write prompts in Cursor or Claude Code as you always do. Nothing to set up.</p>
+        <p>Write prompts in Cursor or Claude Code as you always do.</p>
       </div>
       <div class="how-step">
-        <div class="step-number">2</div>
-        <h4>Sessions are read automatically</h4>
-        <p>Promptrail reads Cursor's SQLite database and Claude Code's JSONL session files. Everything stays local.</p>
+        <div class="step-ring s2">2</div>
+        <h4>Auto-detected</h4>
+        <p>Promptrail reads session data already on disk. Nothing to install or configure.</p>
       </div>
       <div class="how-step">
-        <div class="step-number">3</div>
+        <div class="step-ring s3">3</div>
         <h4>Browse, diff, rollback</h4>
-        <p>Use the CLI, the Cursor extension sidebar, or the Claude Code plugin to trace every change.</p>
+        <p>CLI, extension sidebar, or Claude Code plugin. Your choice.</p>
       </div>
     </div>
   </div>
 </section>
 
-<section class="agents-section" id="agents">
+<section class="agents-section reveal" id="agents">
   <div class="container">
-    <div class="section-label">Compatibility</div>
-    <h2 class="section-title">Works where you work</h2>
+    <div class="compare-label">Compatibility</div>
+    <h2 class="compare-title">Works where you work</h2>
     <div class="agents-table">
       <table>
-        <tr>
-          <th>Feature</th>
-          <th>Cursor</th>
-          <th>Claude Code</th>
-        </tr>
-        <tr>
-          <td>Prompt timeline</td>
-          <td class="check">Yes</td>
-          <td class="check">Yes</td>
-        </tr>
-        <tr>
-          <td>Real timestamps</td>
-          <td class="check">Yes</td>
-          <td class="check">Yes</td>
-        </tr>
-        <tr>
-          <td>File attribution</td>
-          <td class="check">Yes</td>
-          <td class="check">Yes</td>
-        </tr>
-        <tr>
-          <td>Before/after diffs</td>
-          <td class="check">Full snapshots</td>
-          <td>Edit-level hunks</td>
-        </tr>
-        <tr>
-          <td>Cherry-pick rollback</td>
-          <td class="check">Yes</td>
-          <td class="check">Yes</td>
-        </tr>
-        <tr>
-          <td>AI response viewer</td>
-          <td class="check">Yes</td>
-          <td class="check">Yes</td>
-        </tr>
-        <tr>
-          <td>Full-text search</td>
-          <td class="check">Yes</td>
-          <td class="check">Yes</td>
-        </tr>
+        <tr><th>Feature</th><th>Cursor</th><th>Claude Code</th></tr>
+        <tr><td>Prompt timeline</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td>Real timestamps</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td>File attribution</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td>Before/after diffs</td><td class="y">Full snapshots</td><td>Edit-level hunks</td></tr>
+        <tr><td>Cherry-pick rollback</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td>Full-text search</td><td class="y">Yes</td><td class="y">Yes</td></tr>
       </table>
     </div>
   </div>
 </section>
 
-<section class="cta-section">
+<section class="cta-section reveal">
   <div class="container">
     <h2>Try it in 10 seconds</h2>
-    <p>If you've used Cursor or Claude Code on your project, your timeline is already there.</p>
+    <p>If you've used Cursor or Claude Code, your timeline is already there.</p>
     <div class="cta-actions">
       <div class="install-box" onclick="copyInstall()">
         <span class="dollar">$</span>
         <span class="cmd">npx promptrail timeline</span>
         <button class="copy-btn" title="Copy">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3a1.5 1.5 0 011.5-1.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5V3a1.5 1.5 0 011.5-1.5H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
         </button>
-        <span class="copy-toast" id="copy-toast-2">Copied!</span>
+        <span class="copy-toast" id="ct2">Copied!</span>
       </div>
       <a class="gh-btn" href="https://github.com/thisalihassan/promptrail" target="_blank">
-        <svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" fill="currentColor"/></svg>
+        <svg viewBox="0 0 16 16" width="15" height="15"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" fill="currentColor"/></svg>
         Star on GitHub
       </a>
     </div>
@@ -758,13 +533,18 @@
 </footer>
 
 <script>
-function copyInstall() {
+function copyInstall(){
   navigator.clipboard.writeText('npx promptrail timeline');
-  document.querySelectorAll('.copy-toast').forEach(el => {
+  document.querySelectorAll('.copy-toast').forEach(el=>{
     el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 1500);
+    setTimeout(()=>el.classList.remove('show'),1500);
   });
 }
+
+const obs=new IntersectionObserver((entries)=>{
+  entries.forEach(e=>{if(e.isIntersecting)e.target.classList.add('visible')});
+},{threshold:.15});
+document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
 </script>
 </body>
 </html>
