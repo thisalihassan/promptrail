@@ -193,4 +193,11 @@ All embedded workspace paths are automatically rewritten from source to target. 
 
 ## License
 
-MIT
+Promptrail is licensed under the Business Source License 1.1 (`BUSL-1.1`).
+
+The Additional Use Grant allows personal use and internal business use,
+including internal production use within your own organization. A separate
+commercial license is required to sell Promptrail, offer it to third parties as
+a hosted or managed service, bundle or embed it in a product or service
+offered to third parties, white-label it, or otherwise commercialize it beyond
+internal use.
