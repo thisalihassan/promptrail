@@ -18,13 +18,16 @@ Pass `--source claude` to search only Claude Code sessions.
 Examples:
 - `promptrail search "shadow DB"` — find all mentions of shadow DB
 - `promptrail search "toEpochMs"` — find code symbol references
+- `promptrail search "auth.ts"` — find prompts that edited files matching the query
 - `promptrail search "auth" --model sonnet` — search with model filter
 
 Results show:
+- Prompt index (`#N`) — use with `promptrail diff <N>` or `promptrail rollback <N>`
 - Matching prompt text with highlighted keywords
 - Matching response snippets (if the response matched)
-- Session metadata (model, time ago)
+- Matching file names (if the query matched a file path)
+- Source label, file count, model, and time ago
 
-Results are ranked by relevance via FTS5. The search covers both what you asked and what the AI replied.
+Search covers prompt text, AI responses, and file names. Results are sorted by most recent.
 
 If no results are found, the query may be too specific. Try shorter or broader terms.

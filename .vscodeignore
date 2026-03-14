@@ -11,6 +11,7 @@ esbuild.mjs
 .github/
 claude-plugin/
 demo/
+docs/
 node_modules/
 CLAUDE.md
 CONTRIBUTING.md

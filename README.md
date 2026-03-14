@@ -1,8 +1,22 @@
 # Promptrail
 
-**Git tracks what changed. Promptrail tracks why the agent changed it.**
+**git blame, but for AI coding agents.**
 
-Prompt-level version control for AI code editing. Every agent instruction becomes a tracked changeset with full provenance, diffs, and selective rollback.
+See which prompt changed which files. View diffs and rollback by intent. Works with Cursor and Claude Code.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/thisalihassan/promptrail/master/docs/hero.gif" alt="Promptrail demo" width="800">
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/promptrail"><img src="https://img.shields.io/npm/v/promptrail" alt="npm"></a>
+  <a href="https://open-vsx.org/extension/thisalihassan/promptrail"><img src="https://img.shields.io/open-vsx/v/thisalihassan/promptrail" alt="Open VSX"></a>
+  <a href="https://github.com/thisalihassan/promptrail/blob/main/LICENSE"><img src="https://img.shields.io/github/license/thisalihassan/promptrail" alt="License"></a>
+</p>
+
+```bash
+npx promptrail timeline
+```
 
 ## The Problem
 
@@ -120,10 +134,12 @@ Run from your project root:
 ```bash
 promptrail timeline              # List all prompts with file counts and model badges
 promptrail timeline --files      # Include file lists per prompt
+promptrail timeline -n 10        # Show only the last 10 prompts
 promptrail diff 3                # Show diff for prompt #3
 promptrail diff "refactor auth"  # Diff for prompt matching text
 promptrail response 3            # Show AI response for prompt #3
 promptrail search "shadow DB"    # Search prompts and responses (FTS5)
+promptrail search "auth.ts"      # Search by file name
 promptrail rollback 5            # Cherry revert prompt #5 (preserves later edits)
 promptrail rollback 5 --hard     # Restore files to state before prompt #5
 promptrail --version             # Print version

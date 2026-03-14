@@ -50,6 +50,7 @@ interface Flags {
   model?: string;   // substring match against task.model
   files?: boolean;
   hard?: boolean;
+  last?: number;
   positional: string[];
 }
 
@@ -64,6 +65,8 @@ function parseFlags(args: string[]): Flags {
       flags.files = true;
     } else if (args[i] === "--hard") {
       flags.hard = true;
+    } else if ((args[i] === "--last" || args[i] === "-n") && args[i + 1]) {
+      flags.last = parseInt(args[++i], 10) || undefined;
     } else {
       flags.positional.push(args[i]);
     }
@@ -145,7 +148,9 @@ function cmdTimeline(flags: Flags): void {
   }
 
   const chronological = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
-  const sorted = [...chronological].reverse();
+  const allSorted = [...chronological].reverse();
+  const limited = flags.last ? allSorted.slice(0, flags.last) : allSorted;
+  const sorted = limited;
 
   console.log();
   for (let i = 0; i < sorted.length; i++) {
@@ -190,7 +195,12 @@ function cmdTimeline(flags: Flags): void {
     }
   }
 
-  console.log(`\n${DIM}${sorted.length} prompts total${RESET}`);
+  const total = allSorted.length;
+  if (flags.last && total > sorted.length) {
+    console.log(`\n${DIM}Showing ${sorted.length} of ${total} prompts (drop -n to see all)${RESET}`);
+  } else {
+    console.log(`\n${DIM}${total} prompts total${RESET}`);
+  }
 }
 
 function cmdDiff(selector: string, flags: Flags = { positional: [] }): void {
@@ -625,64 +635,130 @@ function cmdSessions(flags: Flags): void {
 function cmdSearch(query: string, flags: Flags): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
-  reader.readAllTasks();
+  const allTasks = reader.readAllTasks();
+  const filtered = filterTasks(allTasks, flags);
 
-  const db = reader.getPromptRailDB();
-  if (!db.isFtsAvailable()) {
-    console.log(`${DIM}Full-text search not available in this runtime.${RESET}`);
-    return;
+  // Build chronological index so we can show #N for each hit
+  const chronological = [...allTasks].sort((a, b) => a.createdAt - b.createdAt);
+  const idToChronIdx = new Map<string, number>();
+  for (let i = 0; i < chronological.length; i++) {
+    idToChronIdx.set(chronological[i].id, i);
   }
 
-  const results = db.search(query, {
-    source: flags.source,
-    model: flags.model,
-  });
+  interface SearchHit {
+    chronIdx?: number;
+    source: string;
+    promptText: string;
+    model: string;
+    createdAt: number;
+    filesCount: number;
+    promptSnippet?: string;
+    responseSnippet?: string;
+    fileSnippet?: string;
+  }
 
-  if (results.length === 0) {
+  const hits: SearchHit[] = [];
+
+  // FTS5 search for Cursor sessions (indexed in shadow DB)
+  const db = reader.getPromptRailDB();
+  if (db.isFtsAvailable() && (!flags.source || flags.source === "cursor")) {
+    const results = db.search(query, { source: flags.source, model: flags.model });
+    const seen = new Set<string>();
+    for (const r of results) {
+      const key = `${r.composerId}:${r.userIndex}`;
+      const existing = hits.find((h) => h.promptText === r.promptText && h.createdAt === r.createdAt);
+      if (existing) {
+        if (r.type === "prompt") existing.promptSnippet = r.snippet;
+        else existing.responseSnippet = r.snippet;
+        continue;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const taskId = `cur-${r.composerId.slice(0, 8)}-${r.userIndex}`;
+      const idx = idToChronIdx.get(taskId);
+      const task = idx !== undefined ? chronological[idx] : undefined;
+      hits.push({
+        chronIdx: idx,
+        source: "cursor",
+        promptText: r.promptText,
+        model: r.model,
+        createdAt: r.createdAt,
+        filesCount: task?.filesChanged.length || 0,
+        promptSnippet: r.type === "prompt" ? r.snippet : undefined,
+        responseSnippet: r.type === "response" ? r.snippet : undefined,
+      });
+    }
+  }
+
+  // Direct text + file search for all tasks
+  const lower = query.toLowerCase();
+  const hitIds = new Set(hits.map((h) => `${h.createdAt}:${h.source}`));
+
+  for (const t of filtered) {
+    const chronIdx = idToChronIdx.get(t.id);
+    const alreadyHit = hitIds.has(`${t.createdAt}:${t.source || "unknown"}`);
+
+    const promptMatch = t.prompt.toLowerCase().includes(lower);
+    const matchedFiles = t.filesChanged.filter((f) => f.toLowerCase().includes(lower));
+    const fileMatch = matchedFiles.length > 0;
+
+    if (!promptMatch && !fileMatch) continue;
+    if (alreadyHit && !fileMatch) continue;
+
+    // If already in hits from FTS but also matched files, add file snippet
+    if (alreadyHit && fileMatch) {
+      const existing = hits.find((h) => h.chronIdx === chronIdx);
+      if (existing) {
+        existing.fileSnippet = matchedFiles.join(", ");
+      }
+      continue;
+    }
+
+    let promptSnippet: string | undefined;
+    if (promptMatch) {
+      const matchIdx = t.prompt.toLowerCase().indexOf(lower);
+      const start = Math.max(0, matchIdx - 30);
+      const end = Math.min(t.prompt.length, matchIdx + query.length + 30);
+      promptSnippet =
+        (start > 0 ? "..." : "") +
+        t.prompt.slice(start, matchIdx) +
+        ">>>" + t.prompt.slice(matchIdx, matchIdx + query.length) + "<<<" +
+        t.prompt.slice(matchIdx + query.length, end) +
+        (end < t.prompt.length ? "..." : "");
+    }
+
+    hits.push({
+      chronIdx,
+      source: t.source || "unknown",
+      promptText: t.prompt,
+      model: t.model || "",
+      createdAt: t.createdAt,
+      filesCount: t.filesChanged.length,
+      promptSnippet,
+      fileSnippet: fileMatch ? matchedFiles.join(", ") : undefined,
+    });
+  }
+
+  if (hits.length === 0) {
     console.log(`${DIM}No results for "${query}"${flags.source || flags.model ? " with current filters" : ""}.${RESET}`);
     return;
   }
 
-  const seen = new Set<string>();
-  const grouped: Array<{
-    composerId: string;
-    userIndex: number;
-    promptText: string;
-    model: string;
-    createdAt: number;
-    promptSnippet?: string;
-    responseSnippet?: string;
-  }> = [];
+  hits.sort((a, b) => b.createdAt - a.createdAt);
 
-  for (const r of results) {
-    const key = `${r.composerId}:${r.userIndex}`;
-    const existing = grouped.find((g) => `${g.composerId}:${g.userIndex}` === key);
-    if (existing) {
-      if (r.type === "prompt") existing.promptSnippet = r.snippet;
-      else existing.responseSnippet = r.snippet;
-      continue;
-    }
-    if (seen.has(key)) continue;
-    seen.add(key);
-    grouped.push({
-      composerId: r.composerId,
-      userIndex: r.userIndex,
-      promptText: r.promptText,
-      model: r.model,
-      createdAt: r.createdAt,
-      promptSnippet: r.type === "prompt" ? r.snippet : undefined,
-      responseSnippet: r.type === "response" ? r.snippet : undefined,
-    });
-  }
+  console.log(`\n${BOLD}Search: "${query}"${RESET}  ${DIM}${hits.length} result(s)${RESET}\n`);
 
-  console.log(`\n${BOLD}Search: "${query}"${RESET}  ${DIM}${grouped.length} result(s)${RESET}\n`);
-
-  for (const g of grouped) {
+  for (const g of hits) {
+    const srcLabel = g.source === "cursor" ? `${BLUE}cursor${RESET}` : g.source === "claude" ? `${MAGENTA}claude${RESET}` : g.source === "vscode" ? `${GREEN}vscode${RESET}` : `${DIM}${g.source}${RESET}`;
     const model = g.model ? `${DIM}[${g.model.replace("claude-", "").replace("-thinking", "")}]${RESET}` : "";
     const time = `${DIM}${timeAgo(g.createdAt)}${RESET}`;
-    const prompt = truncate(g.promptText, 80);
+    const prompt = truncate(g.promptText, 60);
+    const idx = g.chronIdx !== undefined ? `${DIM}#${g.chronIdx}${RESET}` : `${DIM}#?${RESET}`;
+    const fileCount = g.filesCount > 0
+      ? `${GREEN}${g.filesCount} file${g.filesCount === 1 ? "" : "s"}${RESET}`
+      : `${DIM}no changes${RESET}`;
 
-    console.log(`  ${BLUE}cursor${RESET} ${prompt}  ${time} ${model}`);
+    console.log(`  ${idx} ${srcLabel} ${prompt}  ${fileCount}  ${time} ${model}`);
 
     if (g.promptSnippet) {
       const highlighted = g.promptSnippet
@@ -696,8 +772,12 @@ function cmdSearch(query: string, flags: Flags): void {
         .replace(/\n/g, " ");
       console.log(`    ${DIM}response:${RESET} ${highlighted}`);
     }
-    console.log();
+    if (g.fileSnippet) {
+      console.log(`    ${DIM}files:${RESET} ${CYAN}${g.fileSnippet}${RESET}`);
+    }
   }
+
+  console.log(`\n${DIM}Use: promptrail diff <#>  or  promptrail rollback <#>${RESET}`);
 }
 
 function resolveTask(sorted: Task[], selector: string): Task | undefined {
@@ -827,6 +907,7 @@ ${BOLD}Promptrail${RESET} — prompt-level version control for AI code editing
 
 ${BOLD}Usage:${RESET}
   promptrail timeline [--files]     Show all prompts with file change counts
+  promptrail timeline -n 20         Show only the last 20 prompts
   promptrail diff <n|text>          Show diff for prompt #n or matching text
   promptrail response <n|text>      Show AI response for prompt #n or matching text
   promptrail rollback <n|text>      Cherry revert (undo only this prompt's changes)
@@ -840,9 +921,11 @@ ${BOLD}Usage:${RESET}
 ${BOLD}Filters (work with timeline, sessions, diff):${RESET}
   --source, -s <claude|cursor>     Filter by source
   --model, -m <substring>          Filter by model (substring match)
+  --last, -n <count>               Show only the last N prompts
 
 ${BOLD}Examples:${RESET}
   promptrail timeline               List all prompts
+  promptrail timeline -n 10         Last 10 prompts
   promptrail timeline --files       Include file lists
   promptrail timeline -s claude     Only Claude Code prompts
   promptrail timeline -m sonnet     Only prompts using sonnet models
