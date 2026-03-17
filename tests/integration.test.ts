@@ -3,7 +3,8 @@ import * as assert from "node:assert";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { SessionReader } from "../src/core/session-reader";
+import { SessionReader, applyFileWhitelist } from "../src/core/session-reader";
+import { mergeChangesInWindow } from "../src/core/file-watcher";
 
 describe("Integration: Claude session via SessionReader", () => {
   let tmpDir: string;
@@ -66,54 +67,37 @@ describe("Integration: Claude session via SessionReader", () => {
 });
 
 describe("Integration: Timestamp window matching", () => {
-  it("assigns changes to correct prompt windows", () => {
-    const changes = JSON.parse(
+  let fixtureChanges: Array<{ relPath: string; before: string; after: string; timestamp: number }>;
+
+  before(() => {
+    fixtureChanges = JSON.parse(
       fs.readFileSync(path.join(__dirname, "fixtures", "changes.json"), "utf-8")
     );
+  });
 
-    const promptTimestamps = [1773100001000, 1773100120000, 1773100300000];
+  it("assigns changes to correct prompt windows", () => {
+    const w0 = mergeChangesInWindow(fixtureChanges, 1773100001000, 1773100120000);
+    const w1 = mergeChangesInWindow(fixtureChanges, 1773100120000, 1773100300000);
+    const w2 = mergeChangesInWindow(fixtureChanges, 1773100300000, 1773100500000);
 
-    const assignments = new Map<number, string[]>();
-    for (const c of changes) {
-      for (let i = promptTimestamps.length - 1; i >= 0; i--) {
-        const start = promptTimestamps[i];
-        const end = i + 1 < promptTimestamps.length ? promptTimestamps[i + 1] : Infinity;
-        if (c.timestamp >= start && c.timestamp < end) {
-          if (!assignments.has(i)) assignments.set(i, []);
-          assignments.get(i)!.push(c.relPath);
-          break;
-        }
-      }
-    }
-
-    assert.ok((assignments.get(0) || []).includes("src/app.ts"));
-    assert.ok((assignments.get(1) || []).includes("src/utils.ts"));
-    assert.ok((assignments.get(1) || []).includes("src/new-file.ts"));
-    assert.ok((assignments.get(2) || []).includes("src/deleted.ts"));
+    assert.ok(w0.files.includes("src/app.ts"));
+    assert.ok(w1.files.includes("src/utils.ts"));
+    assert.ok(w1.files.includes("src/new-file.ts"));
+    assert.ok(w2.files.includes("src/deleted.ts"));
   });
 
   it("Claude window exclusion removes overlapping changes", () => {
-    const changes = JSON.parse(
-      fs.readFileSync(path.join(__dirname, "fixtures", "changes.json"), "utf-8")
-    );
+    const excludeWindows = [{ start: 1773100200000, end: 1773100300000 }];
+    const { files } = mergeChangesInWindow(fixtureChanges, 1773100001000, 1773100400000, excludeWindows);
 
-    const claudeWindows = [{ start: 1773100200000, end: 1773100300000 }];
-    const filtered = changes.filter((c: any) => {
-      if (c.timestamp < 1773100001000 || c.timestamp >= 1773100400000) return false;
-      for (const w of claudeWindows) {
-        if (c.timestamp >= w.start && c.timestamp < w.end) return false;
-      }
-      return true;
-    });
-
-    assert.ok(!filtered.some((c: any) => c.relPath === "claude-plugin/hooks.json"));
-    assert.ok(filtered.some((c: any) => c.relPath === "src/app.ts"));
-    assert.ok(filtered.some((c: any) => c.relPath === "src/deleted.ts"));
+    assert.ok(!files.includes("claude-plugin/hooks.json"));
+    assert.ok(files.includes("src/app.ts"));
   });
 
   it("identical before/after is treated as no change", () => {
-    const changes = [{ relPath: "noop.ts", before: "x", after: "x", timestamp: 1000 }];
-    assert.strictEqual(changes.filter((c) => c.before !== c.after).length, 0);
+    const changes = [{ relPath: "noop.ts", before: "x", after: "x", timestamp: 500 }];
+    const { files } = mergeChangesInWindow(changes, 0, 1000);
+    assert.strictEqual(files.length, 0);
   });
 
   it("rapid successive edits merge correctly", () => {
@@ -122,16 +106,11 @@ describe("Integration: Timestamp window matching", () => {
       { relPath: "rapid.ts", before: "v2", after: "v3", timestamp: 1001 },
       { relPath: "rapid.ts", before: "v3", after: "v4", timestamp: 1002 },
     ];
-
-    const merged = new Map<string, { before: string; after: string }>();
-    for (const c of changes) {
-      const e = merged.get(c.relPath);
-      if (!e) merged.set(c.relPath, { before: c.before, after: c.after });
-      else e.after = c.after;
-    }
-
-    assert.strictEqual(merged.get("rapid.ts")!.before, "v1");
-    assert.strictEqual(merged.get("rapid.ts")!.after, "v4");
+    const result = mergeChangesInWindow(changes, 0, 2000);
+    const rapid = result.changes.find((c) => c.relativePath === "rapid.ts");
+    assert.ok(rapid);
+    assert.strictEqual(rapid!.before, "v1");
+    assert.strictEqual(rapid!.after, "v4");
   });
 
   it("file created then deleted = no net change", () => {
@@ -139,16 +118,8 @@ describe("Integration: Timestamp window matching", () => {
       { relPath: "tmp.ts", before: "", after: "new", timestamp: 1000 },
       { relPath: "tmp.ts", before: "new", after: "", timestamp: 2000 },
     ];
-
-    const merged = new Map<string, { before: string; after: string }>();
-    for (const c of changes) {
-      const e = merged.get(c.relPath);
-      if (!e) merged.set(c.relPath, { before: c.before, after: c.after });
-      else e.after = c.after;
-    }
-
-    assert.strictEqual(merged.get("tmp.ts")!.before, "");
-    assert.strictEqual(merged.get("tmp.ts")!.after, "");
+    const { files } = mergeChangesInWindow(changes, 0, 3000);
+    assert.ok(!files.includes("tmp.ts"));
   });
 
   it("interleaved edits to multiple files tracked independently", () => {
@@ -157,52 +128,40 @@ describe("Integration: Timestamp window matching", () => {
       { relPath: "b.ts", before: "b1", after: "b2", timestamp: 101 },
       { relPath: "a.ts", before: "a2", after: "a3", timestamp: 102 },
     ];
-
-    const merged = new Map<string, { before: string; after: string }>();
-    for (const c of changes) {
-      const e = merged.get(c.relPath);
-      if (!e) merged.set(c.relPath, { before: c.before, after: c.after });
-      else e.after = c.after;
-    }
-
-    assert.strictEqual(merged.get("a.ts")!.before, "a1");
-    assert.strictEqual(merged.get("a.ts")!.after, "a3");
-    assert.strictEqual(merged.get("b.ts")!.before, "b1");
-    assert.strictEqual(merged.get("b.ts")!.after, "b2");
+    const result = mergeChangesInWindow(changes, 0, 1000);
+    const a = result.changes.find((c) => c.relativePath === "a.ts");
+    const b = result.changes.find((c) => c.relativePath === "b.ts");
+    assert.ok(a && b);
+    assert.strictEqual(a!.before, "a1");
+    assert.strictEqual(a!.after, "a3");
+    assert.strictEqual(b!.before, "b1");
+    assert.strictEqual(b!.after, "b2");
   });
 });
 
 describe("toolEditedFiles whitelist filtering", () => {
-  // Simulates what tracker.ts does: watcher returns files,
-  // whitelist filters them. This is the exact integration point
-  // where the "informational prompt shows 6 files" bug lived.
-
-  function applyWhitelist(
-    watcherFiles: string[],
-    whitelist: Set<string> | undefined
-  ): string[] {
-    return whitelist
-      ? watcherFiles.filter((f) => whitelist.has(f))
-      : watcherFiles;
-  }
-
   it("whitelist with files: only matching files pass through", () => {
     const watcher = ["a.ts", "b.ts", "c.ts"];
-    const whitelist = new Set(["a.ts", "c.ts"]);
-    const result = applyWhitelist(watcher, whitelist);
+    const result = applyFileWhitelist(watcher, new Set(["a.ts", "c.ts"]), undefined);
     assert.deepStrictEqual(result, ["a.ts", "c.ts"]);
   });
 
-  it("empty whitelist (informational prompt): zero files pass through", () => {
+  it("empty toolEditedFiles (informational prompt): zero files pass through", () => {
     const watcher = ["a.ts", "b.ts", "package.json"];
-    const whitelist = new Set<string>();
-    const result = applyWhitelist(watcher, whitelist);
-    assert.deepStrictEqual(result, []);
+    const result = applyFileWhitelist(watcher, new Set<string>(), new Set(["a.ts", "b.ts"]));
+    assert.deepStrictEqual(result, [],
+      "empty toolEditedFiles means no edits — must not fall through to session whitelist");
   });
 
-  it("undefined whitelist (no SQLite data): all files pass through as fallback", () => {
+  it("undefined toolEditedFiles (no SQLite data): falls back to session whitelist", () => {
+    const watcher = ["a.ts", "b.ts", "random.txt"];
+    const result = applyFileWhitelist(watcher, undefined, new Set(["a.ts", "b.ts"]));
+    assert.deepStrictEqual(result, ["a.ts", "b.ts"]);
+  });
+
+  it("undefined toolEditedFiles + no session: all files pass through", () => {
     const watcher = ["a.ts", "b.ts"];
-    const result = applyWhitelist(watcher, undefined);
+    const result = applyFileWhitelist(watcher, undefined, undefined);
     assert.deepStrictEqual(result, ["a.ts", "b.ts"]);
   });
 
@@ -213,24 +172,10 @@ describe("toolEditedFiles whitelist filtering", () => {
       ".github/workflows/ci.yaml",
       "package-lock.json",
     ];
-    const whitelist = new Set(["src/tracker.ts", "src/index.ts"]);
-    const result = applyWhitelist(watcher, whitelist);
+    const result = applyFileWhitelist(watcher, new Set(["src/tracker.ts", "src/index.ts"]), undefined);
     assert.deepStrictEqual(result, ["src/tracker.ts", "src/index.ts"]);
     assert.ok(!result.includes(".github/workflows/ci.yaml"));
     assert.ok(!result.includes("package-lock.json"));
-  });
-
-  it("empty Set is truthy (critical for the undefined vs empty distinction)", () => {
-    const emptySet = new Set<string>();
-    assert.ok(emptySet, "empty Set must be truthy");
-    assert.strictEqual(emptySet.size, 0);
-
-    // This is the exact check tracker.ts uses
-    const whitelist: Set<string> | undefined = emptySet;
-    const filtered = whitelist
-      ? ["a.ts", "b.ts"].filter((f) => whitelist.has(f))
-      : ["a.ts", "b.ts"];
-    assert.deepStrictEqual(filtered, [], "empty Set should filter to nothing");
   });
 });
 
@@ -265,7 +210,7 @@ describe("perPromptFiles sets toolEditedFiles correctly", () => {
   });
 
   it("when perPromptFiles is undefined (no SQLite), toolEditedFiles stays undefined", () => {
-    const perPromptFiles: Map<number, Set<string>> | undefined = undefined;
+    const perPromptFiles = undefined as Map<number, Set<string>> | undefined;
     const tasks = [
       { id: "t0", toolEditedFiles: undefined as Set<string> | undefined },
     ];
@@ -281,25 +226,19 @@ describe("perPromptFiles sets toolEditedFiles correctly", () => {
 
   it("the combined flow: no SQLite = fallback, SQLite + no edits = empty, SQLite + edits = filtered", () => {
     const watcherFiles = ["a.ts", "b.ts", "manual-edit.ts"];
+    const session = new Set(["a.ts", "b.ts"]);
 
-    function applyWhitelist(
-      files: string[],
-      whitelist: Set<string> | undefined
-    ): string[] {
-      return whitelist ? files.filter((f) => whitelist.has(f)) : files;
-    }
+    const noSqlite = applyFileWhitelist(watcherFiles, undefined, session);
+    assert.deepStrictEqual(noSqlite, ["a.ts", "b.ts"], "no SQLite: falls back to session whitelist");
 
-    // Case 1: no SQLite data at all
-    const noSqlite = applyWhitelist(watcherFiles, undefined);
-    assert.deepStrictEqual(noSqlite, ["a.ts", "b.ts", "manual-edit.ts"], "fallback: all files");
+    const withEdits = applyFileWhitelist(watcherFiles, new Set(["a.ts"]), session);
+    assert.deepStrictEqual(withEdits, ["a.ts"], "SQLite + edits: filtered to per-prompt files");
 
-    // Case 2: SQLite says this prompt edited a.ts only
-    const withEdits = applyWhitelist(watcherFiles, new Set(["a.ts"]));
-    assert.deepStrictEqual(withEdits, ["a.ts"], "filtered to AI edits only");
+    const noEdits = applyFileWhitelist(watcherFiles, new Set(), session);
+    assert.deepStrictEqual(noEdits, [], "SQLite + no edits: empty Set blocks everything");
 
-    // Case 3: SQLite says this prompt had no edits (informational)
-    const noEdits = applyWhitelist(watcherFiles, new Set());
-    assert.deepStrictEqual(noEdits, [], "informational prompt: zero files");
+    const noWhitelist = applyFileWhitelist(watcherFiles, undefined, undefined);
+    assert.deepStrictEqual(noWhitelist, watcherFiles, "no whitelist at all: everything passes");
   });
 });
 

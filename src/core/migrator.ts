@@ -12,6 +12,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { PromptRailDB } from "./promptrail-db";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -250,14 +251,21 @@ export function exportSessions(wsRoot: string): ExportData {
     }
   }
 
-  // Snapshots
-  const changesFile = path.join(wsRoot, ".promptrail", "snapshots", "changes.json");
-  if (fs.existsSync(changesFile)) {
-    try {
-      data.snapshots.changes = JSON.parse(
-        fs.readFileSync(changesFile, "utf-8")
-      );
-    } catch {}
+  // Snapshots: read from SQLite first, fall back to changes.json
+  const db = new PromptRailDB(wsRoot);
+  const dbChanges = db.getAllFileChanges();
+  db.dispose();
+  if (dbChanges.length > 0) {
+    data.snapshots.changes = dbChanges;
+  } else {
+    const changesFile = path.join(wsRoot, ".promptrail", "snapshots", "changes.json");
+    if (fs.existsSync(changesFile)) {
+      try {
+        data.snapshots.changes = JSON.parse(
+          fs.readFileSync(changesFile, "utf-8")
+        );
+      } catch {}
+    }
   }
 
   return data;
@@ -420,30 +428,18 @@ export function importSessions(
 
   // ── Snapshots ──
   if (data.snapshots.changes && data.snapshots.changes.length > 0) {
-    const snapshotsDir = path.join(wsRoot, ".promptrail", "snapshots");
-    const changesFile = path.join(snapshotsDir, "changes.json");
-
-    let existing: any[] = [];
-    if (fs.existsSync(changesFile)) {
-      try {
-        existing = JSON.parse(fs.readFileSync(changesFile, "utf-8"));
-      } catch {}
-    }
-
-    // Merge: add only changes not already present (by timestamp dedup)
-    const existingTimestamps = new Set(existing.map((c: any) => c.timestamp));
+    const importDb = new PromptRailDB(wsRoot);
+    const existing = importDb.getAllFileChanges();
+    const existingTimestamps = new Set(existing.map((c) => c.timestamp));
     const newChanges = data.snapshots.changes.filter(
       (c: any) => !existingTimestamps.has(c.timestamp)
     );
 
     if (newChanges.length > 0) {
-      fs.mkdirSync(snapshotsDir, { recursive: true });
-      const merged = [...existing, ...newChanges].sort(
-        (a, b) => a.timestamp - b.timestamp
-      );
-      fs.writeFileSync(changesFile, JSON.stringify(merged), "utf-8");
+      importDb.insertFileChangesBatch(newChanges);
       result.snapshots.imported = true;
     }
+    importDb.dispose();
   }
 
   return result;

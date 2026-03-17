@@ -22,6 +22,10 @@
 - **File name search** — `promptrail search "auth.ts"` finds prompts that edited matching files
 - **Timeline pagination** — `promptrail timeline -n 10` limits output to last N prompts
 - **Landing page** — GitHub Pages site at `docs/`
+- **Cursor hooks** — auto-provisioned `.cursor/hooks/` captures `afterFileEdit`, `beforeSubmitPrompt`, `afterAgentResponse`, `stop` for Claude-quality per-prompt tracking in Cursor
+- **`promptrail init`** — CLI command to explicitly install Cursor hooks
+- **SQLite file changes** — `file_changes` table replaces `changes.json` with automatic migration and 30-day pruning
+- **E2E test suite** — full-pipeline tests (Claude, Cursor watcher, rollback noise)
 
 ## Planned
 

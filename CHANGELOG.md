@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-03-17
+
+### Added
+- **Cursor hooks integration** — auto-provisions `.cursor/hooks/` with a hook script that captures `afterFileEdit`, `beforeSubmitPrompt`, `afterAgentResponse`, and `stop` events. Enables Claude-quality per-prompt edit tracking (exact `old_string`/`new_string` pairs), response viewing, and rollback for Cursor sessions.
+- **`promptrail init` CLI command** — explicitly installs Cursor hooks (also auto-provisions silently on first use of any command)
+- **Hook-backed session parsing** — Cursor sessions with hook data get exact edit/write records per prompt, bypassing the FileWatcher time-window attribution entirely
+- **Hook response viewing** — `promptrail response` and the extension sidebar now show AI responses captured via hooks
+- **File changes in SQLite** — new `file_changes` table in the shadow DB replaces `changes.json`, with automatic migration, batch inserts, range queries, and 30-day pruning
+- **E2E test suite** — 3 full-pipeline scenarios (Claude, Cursor watcher, BUG 17 rollback noise) that create real workspaces and run Tracker end-to-end
+
+### Fixed
+- **Rollback file writes leak into other prompts (BUG 17)** — empty `toolEditedFiles` now blocks all watcher files instead of falling through to the session whitelist
+- **No-edit prompt shows file changes (BUG 18)** — `resolveToolEditedFiles()` preserves the empty Set when the session has per-prompt data, so "no edits" is authoritative
+- **Shadow DB misses assistant bubbles for later prompts (BUG 19)** — `shouldResnapshot()` compares cached vs readable assistant counts instead of checking `=== 0`
+- **Claude Code slash commands appear as prompts (BUG 20)** — `isClaudeInternalMessage()` filters `/plugin`, `/help`, command output, and meta caveats from the timeline
+
+### Changed
+- **Extracted shared modules** — `mergeChangesInWindow`, `applyFileWhitelist`, `deduplicateTimestamps`, `resolveToolEditedFiles`, `isClaudeInternalMessage`, and `shouldResnapshot` extracted into tested, exported functions
+- **All regression tests refactored** — tests now call the actual exported functions instead of reimplementing inline logic
+- **WAL mode enabled** on the shadow DB for better concurrent access from hooks and the extension
+- Landing page badge changed from "Open Source" to "Local-first"
+
 ## [0.6.4] - 2026-03-14
 
 ### Fixed
@@ -142,7 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/thisalihassan/promptrail/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/thisalihassan/promptrail/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/thisalihassan/promptrail/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/thisalihassan/promptrail/compare/v0.6.1...v0.6.2

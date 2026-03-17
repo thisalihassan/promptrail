@@ -2,13 +2,10 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { FileChange } from '../models/types';
+import { mergeChangesInWindow, type TimestampedChange } from './change-merge';
+import type { PromptRailDB } from './promptrail-db';
 
-interface TimestampedChange {
-	relPath: string;
-	before: string;
-	after: string;
-	timestamp: number;
-}
+export { mergeChangesInWindow, type TimestampedChange } from './change-merge';
 
 export const ALWAYS_IGNORE = ['.git/', '.promptrail/'];
 export const NEVER_IGNORE = ['.cursor/', '.claude/'];
@@ -71,19 +68,34 @@ export function shouldTrackFile(
 export class FileWatcher {
 	private workspaceRoot: string;
 	private contentCache = new Map<string, string>();
-	private changes: TimestampedChange[] = [];
-	private snapshotsDir: string;
+	private pendingChanges: TimestampedChange[] = [];
+	private db: PromptRailDB | undefined;
 	private disposables: vscode.Disposable[] = [];
 	private ignorePatterns: ReturnType<typeof loadGitignorePatterns>;
 
-	constructor(workspaceRoot: string) {
+	constructor(workspaceRoot: string, db?: PromptRailDB) {
 		this.workspaceRoot = workspaceRoot;
-		this.snapshotsDir = path.join(workspaceRoot, '.promptrail', 'snapshots');
+		this.db = db;
 		this.ignorePatterns = loadGitignorePatterns(workspaceRoot);
 
-		this.loadExistingChanges();
+		this.migrateChangesJson();
 		this.warmCache();
 		this.startWatching();
+	}
+
+	private migrateChangesJson(): void {
+		const jsonPath = path.join(this.workspaceRoot, '.promptrail', 'snapshots', 'changes.json');
+		if (!fs.existsSync(jsonPath)) return;
+		if (!this.db) return;
+		if (this.db.getFileChangeCount() > 0) return;
+
+		try {
+			const raw: TimestampedChange[] = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+			if (raw.length > 0) {
+				this.db.insertFileChangesBatch(raw);
+				fs.renameSync(jsonPath, jsonPath + '.migrated');
+			}
+		} catch {}
 	}
 
 	private startWatching(): void {
@@ -140,7 +152,7 @@ export class FileWatcher {
 
 		if (before === after) return;
 
-		this.changes.push({
+		this.pendingChanges.push({
 			relPath,
 			before,
 			after,
@@ -163,7 +175,7 @@ export class FileWatcher {
 			return;
 		}
 
-		this.changes.push({
+		this.pendingChanges.push({
 			relPath,
 			before: '',
 			after: content,
@@ -178,7 +190,7 @@ export class FileWatcher {
 		if (!this.shouldTrack(relPath)) return;
 
 		const before = this.contentCache.get(relPath) ?? '';
-		this.changes.push({
+		this.pendingChanges.push({
 			relPath,
 			before,
 			after: '',
@@ -188,57 +200,19 @@ export class FileWatcher {
 		this.contentCache.delete(relPath);
 	}
 
-	/**
-	 * Returns files changed between startTs and endTs.
-	 * For the same file edited multiple times in the window,
-	 * uses the first "before" and last "after".
-	 */
 	getChangesInWindow(
 		startTs: number,
 		endTs: number,
 		excludeWindows?: Array<{ start: number; end: number }>
 	): { files: string[]; changes: FileChange[] } {
-		const inWindow = this.changes.filter((c) => {
-			if (c.timestamp < startTs || c.timestamp >= endTs) return false;
-			if (excludeWindows) {
-				for (const w of excludeWindows) {
-					if (c.timestamp >= w.start && c.timestamp < w.end) return false;
-				}
-			}
-			return true;
-		});
-
-		const merged = new Map<string, { before: string; after: string }>();
-
-		for (const c of inWindow) {
-			const existing = merged.get(c.relPath);
-			if (!existing) {
-				merged.set(c.relPath, { before: c.before, after: c.after });
-			} else {
-				existing.after = c.after;
-			}
-		}
-
-		const files: string[] = [];
-		const changes: FileChange[] = [];
-
-		for (const [relPath, data] of merged) {
-			if (data.before === data.after) continue;
-			files.push(relPath);
-
-			let type: FileChange['type'] = 'modified';
-			if (data.before === '' && data.after !== '') type = 'added';
-			else if (data.before !== '' && data.after === '') type = 'deleted';
-
-			changes.push({
-				relativePath: relPath,
-				type,
-				before: data.before,
-				after: data.after
-			});
-		}
-
-		return { files, changes };
+		const dbChanges = this.db
+			? this.db.getChangesInRange(startTs, endTs)
+			: [];
+		const pendingInRange = this.pendingChanges.filter(
+			(c) => c.timestamp >= startTs && c.timestamp < endTs
+		);
+		const allChanges = [...dbChanges, ...pendingInRange];
+		return mergeChangesInWindow(allChanges, startTs, endTs, excludeWindows);
 	}
 
 	getRollbackForWindow(
@@ -256,19 +230,11 @@ export class FileWatcher {
 	}
 
 	persistChanges(): void {
-		if (this.changes.length === 0) return;
-		try {
-			fs.mkdirSync(this.snapshotsDir, { recursive: true });
-			fs.writeFileSync(path.join(this.snapshotsDir, 'changes.json'), JSON.stringify(this.changes), 'utf-8');
-		} catch {}
-	}
-
-	private loadExistingChanges(): void {
-		const filePath = path.join(this.snapshotsDir, 'changes.json');
-		if (!fs.existsSync(filePath)) return;
-		try {
-			this.changes = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-		} catch {}
+		if (this.pendingChanges.length === 0) return;
+		if (this.db) {
+			this.db.insertFileChangesBatch(this.pendingChanges);
+			this.pendingChanges = [];
+		}
 	}
 
 	dispose(): void {

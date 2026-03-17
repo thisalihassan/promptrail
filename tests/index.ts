@@ -4,3 +4,4 @@ import "./file-watcher.test";
 import "./integration.test";
 import "./regressions.test";
 import "./selective-revert.test";
+import "./e2e.test";
