@@ -2,17 +2,14 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import type { Task, TaskChangeset, FileChange } from "../models/types";
-import { SessionReader, applyFileWhitelist, type TaskWithEdits } from "./session-reader";
-import { FileWatcher } from "./file-watcher";
+import { SessionReader, type TaskWithEdits } from "./session-reader";
 import {
-  selectiveRevert,
   revertStringEdits,
   type RollbackResult,
 } from "./selective-revert";
 
 export class Tracker {
   private sessionReader: SessionReader;
-  private fileWatcher: FileWatcher;
   private workspaceRoot: string;
   private onDidChangeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChange = this.onDidChangeEmitter.event;
@@ -21,71 +18,15 @@ export class Tracker {
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
     this.sessionReader = new SessionReader(workspaceRoot);
-    const db = this.sessionReader.getPromptRailDB();
-    this.fileWatcher = new FileWatcher(workspaceRoot, db);
-
-    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-    db.pruneOldChanges(Date.now() - THIRTY_DAYS_MS);
 
     this.pollInterval = setInterval(() => {
-      this.fileWatcher.persistChanges();
       this.onDidChangeEmitter.fire();
     }, 4000);
   }
 
   getTasks(): Task[] {
     const tasks = this.sessionReader.readAllTasks();
-    const sorted = [...tasks].sort(
-      (a, b) => a.createdAt - b.createdAt
-    );
-
-    for (let i = 0; i < sorted.length; i++) {
-      if (sorted[i].source !== "cursor") continue;
-
-      const te = sorted[i] as TaskWithEdits;
-
-      // Hook-sourced tasks already have edits/writes — skip FileWatcher
-      if ((te.edits && te.edits.length > 0) || (te.writes && te.writes.length > 0)) {
-        continue;
-      }
-
-      const startTs = sorted[i].createdAt;
-      const endTs =
-        i + 1 < sorted.length ? sorted[i + 1].createdAt : Date.now();
-
-      const { files } = this.fileWatcher.getChangesInWindow(
-        startTs,
-        endTs
-      );
-      if (files.length > 0) {
-        sorted[i].filesChanged = applyFileWhitelist(
-          files, te.toolEditedFiles, te.sessionEditedFiles
-        );
-      }
-      if (sorted[i].filesChanged.length === 0 && te.toolEditedFiles && te.toolEditedFiles.size > 0) {
-        sorted[i].filesChanged = [...te.toolEditedFiles];
-      }
-    }
-
-    return sorted.sort((a, b) => b.createdAt - a.createdAt);
-  }
-
-  /**
-   * Builds time windows for sources that are self-contained (Claude, VS Code),
-   * so the file watcher excludes changes that belong to them.
-   */
-  private buildSelfContainedWindows(
-    sorted: Task[]
-  ): Array<{ start: number; end: number }> {
-    const windows: Array<{ start: number; end: number }> = [];
-    for (let i = 0; i < sorted.length; i++) {
-      if (sorted[i].source !== "claude" && sorted[i].source !== "vscode") continue;
-      const start = sorted[i].createdAt;
-      const end =
-        i + 1 < sorted.length ? sorted[i + 1].createdAt : Date.now();
-      windows.push({ start, end });
-    }
-    return windows;
+    return [...tasks].sort((a, b) => b.createdAt - a.createdAt);
   }
 
   getActiveTaskId(): string | undefined {
@@ -101,42 +42,10 @@ export class Tracker {
       | undefined;
     if (!task) return undefined;
 
-    if (task.source === "claude" || task.source === "vscode") {
-      return this.claudeChangeset(task);
-    }
-
-    if (task.source === "cursor") {
-      // Hook-sourced tasks: use Claude-style changeset
-      if ((task.edits && task.edits.length > 0) || (task.writes && task.writes.length > 0)) {
-        return this.claudeChangeset(task);
-      }
-
-      const sorted = [...tasks].sort(
-        (a, b) => a.createdAt - b.createdAt
-      );
-      const idx = sorted.findIndex((t) => t.id === taskId);
-      const startTs = task.createdAt;
-      const endTs =
-        idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-
-      let { changes } = this.fileWatcher.getChangesInWindow(
-        startTs,
-        endTs
-      );
-      if (task.toolEditedFiles) {
-        changes = changes.filter((c) =>
-          task.toolEditedFiles!.has(c.relativePath)
-        );
-      }
-      if (changes.length > 0) {
-        return { taskId, changes };
-      }
-    }
-
-    return undefined;
+    return this.buildChangeset(task);
   }
 
-  private claudeChangeset(task: TaskWithEdits): TaskChangeset | undefined {
+  private buildChangeset(task: TaskWithEdits): TaskChangeset | undefined {
     const changes: FileChange[] = [];
 
     if (task.edits && task.edits.length > 0) {
@@ -175,10 +84,7 @@ export class Tracker {
     return { taskId: task.id, changes };
   }
 
-  async rollbackToTask(
-    taskId: string,
-    mode: "selective" | "hard" = "selective"
-  ): Promise<RollbackResult> {
+  async rollbackToTask(taskId: string): Promise<RollbackResult> {
     const tasks = this.sessionReader.readAllTasks();
     const task = tasks.find((t) => t.id === taskId) as
       | TaskWithEdits
@@ -190,205 +96,16 @@ export class Tracker {
     };
     if (!task) return empty;
 
-    if (mode === "hard") {
-      return this.hardRollback(task, tasks);
-    }
-
-    if (task.source === "claude" || task.source === "vscode") {
-      return this.selectiveRollbackClaude(task);
-    }
-
-    if (task.source === "cursor") {
-      // Hook-sourced tasks: use Claude-style rollback (exact edit reversal)
-      if ((task.edits && task.edits.length > 0) || (task.writes && task.writes.length > 0)) {
-        return this.selectiveRollbackClaude(task);
-      }
-
-      const sorted = [...tasks].sort(
-        (a, b) => a.createdAt - b.createdAt
-      );
-      const idx = sorted.findIndex((t) => t.id === taskId);
-      const startTs = task.createdAt;
-      const endTs =
-        idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-
-      return this.selectiveRollbackWatcher(startTs, endTs, task.toolEditedFiles);
-    }
-
-    return empty;
+    return this.editBasedRollback(task);
   }
 
-  private hardRollback(
-    task: TaskWithEdits,
-    tasks: TaskWithEdits[]
-  ): RollbackResult {
+  private editBasedRollback(task: TaskWithEdits): RollbackResult {
     const result: RollbackResult = {
       success: false,
       filesReverted: [],
       conflicts: [],
     };
 
-    if (task.source === "cursor") {
-      const sorted = [...tasks].sort(
-        (a, b) => a.createdAt - b.createdAt
-      );
-      const idx = sorted.findIndex((t) => t.id === task.id);
-      const startTs = task.createdAt;
-      const endTs =
-        idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-
-      let changes = this.fileWatcher.getRollbackForWindow(startTs, endTs);
-      if (task.toolEditedFiles) {
-        changes = changes.filter((c) =>
-          task.toolEditedFiles!.has(c.relativePath)
-        );
-      }
-      if (changes.length === 0) return result;
-
-      for (const change of changes) {
-        const absPath = path.join(this.workspaceRoot, change.relativePath);
-        if (change.type === "deleted") {
-          if (fs.existsSync(absPath)) {
-            fs.unlinkSync(absPath);
-            result.filesReverted.push({
-              path: change.relativePath,
-              status: "deleted",
-            });
-          }
-        } else if (change.after !== undefined) {
-          const dir = path.dirname(absPath);
-          if (!fs.existsSync(dir))
-            fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(absPath, change.after, "utf-8");
-          result.filesReverted.push({
-            path: change.relativePath,
-            status: "reverted",
-          });
-        }
-      }
-    }
-
-    result.success = result.filesReverted.length > 0;
-    this.onDidChangeEmitter.fire();
-    return result;
-  }
-
-  private selectiveRollbackWatcher(
-    startTs: number,
-    endTs: number,
-    whitelist?: Set<string>
-  ): RollbackResult {
-    const result: RollbackResult = {
-      success: false,
-      filesReverted: [],
-      conflicts: [],
-    };
-
-    let { changes } = this.fileWatcher.getChangesInWindow(startTs, endTs);
-    if (whitelist) {
-      changes = changes.filter((c) => whitelist.has(c.relativePath));
-    }
-    if (changes.length === 0) return result;
-
-    for (const change of changes) {
-      const absPath = path.join(this.workspaceRoot, change.relativePath);
-
-      if (change.type === "added") {
-        // File was created by this prompt
-        let currentContent: string | undefined;
-        try {
-          currentContent = fs.readFileSync(absPath, "utf-8");
-        } catch {}
-
-        if (currentContent === undefined) {
-          // Already deleted, skip
-          continue;
-        }
-
-        if (currentContent === change.after) {
-          // No subsequent changes — safe to delete
-          fs.unlinkSync(absPath);
-          result.filesReverted.push({
-            path: change.relativePath,
-            status: "deleted",
-          });
-        } else {
-          result.conflicts.push({
-            path: change.relativePath,
-            reason:
-              "File was created by this prompt but later modified — cannot safely delete",
-          });
-        }
-        continue;
-      }
-
-      if (change.type === "deleted") {
-        // File was deleted by this prompt — recreate with before content
-        if (fs.existsSync(absPath)) {
-          result.conflicts.push({
-            path: change.relativePath,
-            reason:
-              "File was deleted by this prompt but has been recreated since",
-          });
-        } else {
-          const dir = path.dirname(absPath);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(absPath, change.before ?? "", "utf-8");
-          result.filesReverted.push({
-            path: change.relativePath,
-            status: "recreated",
-          });
-        }
-        continue;
-      }
-
-      // Modified file — selective revert
-      let currentContent: string;
-      try {
-        currentContent = fs.readFileSync(absPath, "utf-8");
-      } catch {
-        result.conflicts.push({
-          path: change.relativePath,
-          reason: "File no longer exists on disk",
-        });
-        continue;
-      }
-
-      const revert = selectiveRevert(
-        change.before ?? "",
-        change.after ?? "",
-        currentContent
-      );
-
-      if (revert.applied > 0) {
-        fs.writeFileSync(absPath, revert.content, "utf-8");
-        result.filesReverted.push({
-          path: change.relativePath,
-          status: "reverted",
-        });
-      }
-
-      for (const c of revert.conflicts) {
-        result.conflicts.push({
-          path: change.relativePath,
-          reason: c.description,
-        });
-      }
-    }
-
-    result.success = result.filesReverted.length > 0;
-    this.onDidChangeEmitter.fire();
-    return result;
-  }
-
-  private selectiveRollbackClaude(task: TaskWithEdits): RollbackResult {
-    const result: RollbackResult = {
-      success: false,
-      filesReverted: [],
-      conflicts: [],
-    };
-
-    // Revert writes (file creations) first
     if (task.writes && task.writes.length > 0) {
       for (const write of task.writes) {
         const absPath = path.join(this.workspaceRoot, write.file);
@@ -412,7 +129,6 @@ export class Tracker {
       }
     }
 
-    // Revert edits with exact string matching
     if (task.edits && task.edits.length > 0) {
       const byFile = new Map<
         string,
@@ -471,7 +187,6 @@ export class Tracker {
       const fullComposerId = db.findComposerIdByPrefix(shortId);
       if (!fullComposerId) return undefined;
 
-      // Try hook responses first (from Cursor hooks)
       const te = task as TaskWithEdits;
       if (te.generationId) {
         const hookResp = this.sessionReader.getHookResponse(
@@ -485,7 +200,6 @@ export class Tracker {
           return md;
         }
       } else {
-        // Look up generationId from prompt index
         const genId = this.sessionReader.getHookGenerationId(
           fullComposerId,
           userIndex
@@ -504,7 +218,6 @@ export class Tracker {
         }
       }
 
-      // Fall back to shadow DB assistant bubbles
       const bubbles = db.getAssistantBubbles(fullComposerId);
       const forPrompt = bubbles.filter(
         (b: any) => b.userIndex === userIndex
@@ -572,7 +285,6 @@ export class Tracker {
 
   dispose(): void {
     if (this.pollInterval) clearInterval(this.pollInterval);
-    this.fileWatcher.dispose();
     this.onDidChangeEmitter.dispose();
     this.sessionReader.getPromptRailDB().dispose();
   }

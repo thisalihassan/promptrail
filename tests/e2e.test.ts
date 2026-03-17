@@ -165,16 +165,15 @@ describe("E2E: Claude Code full pipeline", () => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// E2E: Cursor — full pipeline with watcher data
+// E2E: Cursor JSONL — without hooks or SQLite, file attribution
+// comes only from toolFormerData/firstEditBubbleId. Pure JSONL
+// sessions (no hooks, no SQLite) have empty filesChanged since
+// the watcher-based attribution pipeline was removed.
 //
-// Creates a workspace with:
-//   - Cursor JSONL transcript (3 prompts)
-//   - changes.json with timestamped file snapshots
-//
-// Tests the watcher-based attribution pipeline:
-//   getTasks() merges JSONL prompts with changes.json windows
+// This documents the expected behavior: to get file attribution
+// for Cursor sessions, hooks must be installed (`promptrail init`).
 // ──────────────────────────────────────────────────────────────
-describe("E2E: Cursor pipeline with watcher data", () => {
+describe("E2E: Cursor JSONL-only pipeline (no hooks)", () => {
   let wsRoot: string;
   let transcriptDir: string;
   let tracker: Tracker;
@@ -183,7 +182,6 @@ describe("E2E: Cursor pipeline with watcher data", () => {
   before(() => {
     wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "promptrail-e2e-cursor-"));
 
-    // Cursor JSONL transcript
     const encoded = wsRoot.replace(/\//g, "-").replace(/^-/, "");
     transcriptDir = path.join(
       os.homedir(), ".cursor", "projects", encoded,
@@ -202,24 +200,6 @@ describe("E2E: Cursor pipeline with watcher data", () => {
     fs.writeFileSync(
       path.join(transcriptDir, `${composerId}.jsonl`),
       lines.join("\n") + "\n"
-    );
-
-    // Get the JSONL mtime so we can place snapshots in the right windows
-    const stat = fs.statSync(path.join(transcriptDir, `${composerId}.jsonl`));
-    const mtime = stat.mtimeMs;
-
-    // Watcher snapshot data: changes that fall in each prompt's window
-    // Session-range fallback will spread 3 prompts across [mtime-90s, mtime]
-    // So prompt windows are roughly: [mtime-90s, mtime-60s], [mtime-60s, mtime-30s], [mtime-30s, mtime]
-    const snapshotsDir = path.join(wsRoot, ".promptrail", "snapshots");
-    fs.mkdirSync(snapshotsDir, { recursive: true });
-    const snapshots = [
-      { relPath: "src/db.ts", before: "v1", after: "v2", timestamp: mtime - 75_000 },
-      { relPath: "src/db.test.ts", before: "", after: "test code", timestamp: mtime - 45_000 },
-    ];
-    fs.writeFileSync(
-      path.join(snapshotsDir, "changes.json"),
-      JSON.stringify(snapshots)
     );
 
     tracker = new Tracker(wsRoot);
@@ -241,157 +221,24 @@ describe("E2E: Cursor pipeline with watcher data", () => {
     assert.strictEqual(cursor.length, 3, `Expected 3 Cursor tasks, got ${cursor.length}`);
   });
 
-  it("watcher-attributed files appear on the correct prompts", () => {
-    const tasks = tracker.getTasks();
-    const cursor = tasks
-      .filter((t) => t.source === "cursor")
-      .sort((a, b) => a.createdAt - b.createdAt);
-
-    const allFiles = cursor.flatMap((t) => t.filesChanged);
-    assert.ok(allFiles.includes("src/db.ts") || allFiles.includes("src/db.test.ts"),
-      `Expected watcher files in at least one prompt, got: ${JSON.stringify(cursor.map(t => ({ prompt: t.prompt.slice(0, 30), files: t.filesChanged })))}`);
-  });
-
-  it("informational prompt (coverage question) has no filesChanged", () => {
-    const tasks = tracker.getTasks();
-    const cursor = tasks
-      .filter((t) => t.source === "cursor")
-      .sort((a, b) => a.createdAt - b.createdAt);
-    const infoPrompt = cursor[2];
-
-    assert.ok(infoPrompt.prompt.includes("coverage"));
-    assert.strictEqual(infoPrompt.filesChanged.length, 0,
-      `Informational prompt should have 0 files, got: ${infoPrompt.filesChanged}`);
-  });
-
-  it("getTaskChangeset() returns watcher diffs for file-changing prompts", () => {
-    const tasks = tracker.getTasks();
-    const cursor = tasks
-      .filter((t) => t.source === "cursor")
-      .sort((a, b) => a.createdAt - b.createdAt);
-
-    const promptsWithFiles = cursor.filter((t) => t.filesChanged.length > 0);
-    if (promptsWithFiles.length === 0) {
-      // Timestamp alignment may vary -- skip gracefully
-      return;
-    }
-
-    const changeset = tracker.getTaskChangeset(promptsWithFiles[0].id);
-    assert.ok(changeset, "Should have changeset for prompt with files");
-    assert.ok(changeset!.changes.length > 0, "Should have file changes");
-    assert.ok(changeset!.changes[0].before !== undefined);
-    assert.ok(changeset!.changes[0].after !== undefined);
-  });
-});
-
-// ──────────────────────────────────────────────────────────────
-// E2E: BUG 17 scenario — rollback noise doesn't leak
-//
-// Simulates the exact bug: watcher has noise from a rollback
-// operation (file changes with timestamps in the last prompt's
-// window). Verifies the whitelist prevents leaking.
-//
-// This requires the shadow DB path where toolEditedFiles is set
-// to empty Set for no-edit prompts. Without SQLite, the JSONL
-// path sets toolEditedFiles=undefined which falls back to session
-// whitelist — so this test documents the JSONL fallback behavior.
-// ──────────────────────────────────────────────────────────────
-describe("E2E: BUG 17 — rollback noise in watcher", () => {
-  let wsRoot: string;
-  let transcriptDir: string;
-  let tracker: Tracker;
-  const composerId = "e2e-bug17-aaaa-bbbb-cccccccccccc";
-
-  before(() => {
-    wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "promptrail-e2e-bug17-"));
-
-    const encoded = wsRoot.replace(/\//g, "-").replace(/^-/, "");
-    transcriptDir = path.join(
-      os.homedir(), ".cursor", "projects", encoded,
-      "agent-transcripts", composerId
-    );
-    fs.mkdirSync(transcriptDir, { recursive: true });
-
-    const lines = [
-      '{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Remove the license section from README</user_query>"}]}}',
-      '{"role":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}',
-      '{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Just give me 20 ideas for a blog post</user_query>"}]}}',
-      '{"role":"assistant","message":{"content":[{"type":"text","text":"Here are 20 ideas..."}]}}',
-    ];
-    fs.writeFileSync(
-      path.join(transcriptDir, `${composerId}.jsonl`),
-      lines.join("\n") + "\n"
-    );
-
-    const stat = fs.statSync(path.join(transcriptDir, `${composerId}.jsonl`));
-    const mtime = stat.mtimeMs;
-
-    // With 2 prompts and JSONL fallback, deduplicateTimestamps spreads them.
-    // We need snapshots placed AFTER the first prompt's computed timestamp.
-    // Use a tight range so timestamps fall reliably in the right windows.
-    // The first prompt gets roughly mtime - 30s, second gets roughly mtime.
-    const snapshotsDir = path.join(wsRoot, ".promptrail", "snapshots");
-    fs.mkdirSync(snapshotsDir, { recursive: true });
-    const snapshots = [
-      // Legitimate change by prompt 1 (placed in the middle of its window)
-      { relPath: "README.md", before: "old readme", after: "new readme", timestamp: mtime - 20_000 },
-      // Rollback noise: all placed AFTER mtime (in prompt 2's window [mtime, now))
-      { relPath: "README.md", before: "new readme", after: "old readme", timestamp: mtime + 1_000 },
-      { relPath: "README.md", before: "old readme", after: "new readme", timestamp: mtime + 2_000 },
-      { relPath: "README.md", before: "new readme", after: "old readme", timestamp: mtime + 3_000 },
-    ];
-    fs.writeFileSync(
-      path.join(snapshotsDir, "changes.json"),
-      JSON.stringify(snapshots)
-    );
-
-    tracker = new Tracker(wsRoot);
-  });
-
-  after(() => {
-    tracker.dispose();
-    fs.rmSync(wsRoot, { recursive: true, force: true });
-    const encoded = wsRoot.replace(/\//g, "-").replace(/^-/, "");
-    fs.rmSync(
-      path.join(os.homedir(), ".cursor", "projects", encoded),
-      { recursive: true, force: true }
-    );
-  });
-
-  it("getTasks() returns 2 prompts", () => {
+  it("JSONL-only prompts have empty filesChanged (no hooks/SQLite)", () => {
     const tasks = tracker.getTasks();
     const cursor = tasks.filter((t) => t.source === "cursor");
-    assert.strictEqual(cursor.length, 2);
+
+    for (const t of cursor) {
+      assert.strictEqual(t.filesChanged.length, 0,
+        `JSONL-only prompt should have no file attribution, got: ${t.filesChanged}`);
+    }
   });
 
-  it("prompt 1 (README edit) has README.md in filesChanged", () => {
+  it("getTaskChangeset() returns undefined without edit data", () => {
     const tasks = tracker.getTasks();
-    const cursor = tasks
-      .filter((t) => t.source === "cursor")
-      .sort((a, b) => a.createdAt - b.createdAt);
+    const cursor = tasks.filter((t) => t.source === "cursor");
 
-    assert.ok(cursor[0].prompt.includes("README") || cursor[0].prompt.includes("license"));
-    assert.ok(cursor[0].filesChanged.includes("README.md"),
-      `Prompt 1 should have README.md, got: ${cursor[0].filesChanged}`);
-  });
-
-  it("prompt 2 (informational) does NOT have README.md from rollback noise", () => {
-    const tasks = tracker.getTasks();
-    const cursor = tasks
-      .filter((t) => t.source === "cursor")
-      .sort((a, b) => a.createdAt - b.createdAt);
-
-    assert.ok(cursor[1].prompt.includes("20 ideas") || cursor[1].prompt.includes("blog"));
-    // Without SQLite toolEditedFiles, JSONL path has toolEditedFiles=undefined
-    // which falls back to sessionEditedFiles (not available in JSONL).
-    // With no whitelist, the rollback noise MAY leak here.
-    // The fix for this requires SQLite (toolEditedFiles = empty Set).
-    // This test documents the JSONL fallback limitation.
-    const files = cursor[1].filesChanged;
-    if (files.length > 0) {
-      // If files leaked, verify it's the known JSONL limitation (no whitelist)
-      assert.ok(files.includes("README.md"),
-        "If files leaked, it should be README.md from rollback noise");
+    for (const t of cursor) {
+      const changeset = tracker.getTaskChangeset(t.id);
+      assert.strictEqual(changeset, undefined,
+        "JSONL-only prompts have no edit data for changesets");
     }
   });
 });
