@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import type { Task, TaskChangeset, FileChange } from "../models/types";
-import { SessionReader, type TaskWithEdits } from "./session-reader";
+import { SessionReader, applyFileWhitelist, type TaskWithEdits } from "./session-reader";
 import { FileWatcher } from "./file-watcher";
 import {
   selectiveRevert,
@@ -21,7 +21,11 @@ export class Tracker {
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
     this.sessionReader = new SessionReader(workspaceRoot);
-    this.fileWatcher = new FileWatcher(workspaceRoot);
+    const db = this.sessionReader.getPromptRailDB();
+    this.fileWatcher = new FileWatcher(workspaceRoot, db);
+
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+    db.pruneOldChanges(Date.now() - THIRTY_DAYS_MS);
 
     this.pollInterval = setInterval(() => {
       this.fileWatcher.persistChanges();
@@ -38,6 +42,13 @@ export class Tracker {
     for (let i = 0; i < sorted.length; i++) {
       if (sorted[i].source !== "cursor") continue;
 
+      const te = sorted[i] as TaskWithEdits;
+
+      // Hook-sourced tasks already have edits/writes — skip FileWatcher
+      if ((te.edits && te.edits.length > 0) || (te.writes && te.writes.length > 0)) {
+        continue;
+      }
+
       const startTs = sorted[i].createdAt;
       const endTs =
         i + 1 < sorted.length ? sorted[i + 1].createdAt : Date.now();
@@ -46,17 +57,13 @@ export class Tracker {
         startTs,
         endTs
       );
-      const te = sorted[i] as TaskWithEdits;
-      const perPrompt = te.toolEditedFiles;
-      const session = te.sessionEditedFiles;
       if (files.length > 0) {
-        const whitelist = perPrompt && perPrompt.size > 0 ? perPrompt : session;
-        sorted[i].filesChanged = whitelist && whitelist.size > 0
-          ? files.filter((f) => whitelist.has(f))
-          : files;
+        sorted[i].filesChanged = applyFileWhitelist(
+          files, te.toolEditedFiles, te.sessionEditedFiles
+        );
       }
-      if (sorted[i].filesChanged.length === 0 && perPrompt && perPrompt.size > 0) {
-        sorted[i].filesChanged = [...perPrompt];
+      if (sorted[i].filesChanged.length === 0 && te.toolEditedFiles && te.toolEditedFiles.size > 0) {
+        sorted[i].filesChanged = [...te.toolEditedFiles];
       }
     }
 
@@ -99,6 +106,11 @@ export class Tracker {
     }
 
     if (task.source === "cursor") {
+      // Hook-sourced tasks: use Claude-style changeset
+      if ((task.edits && task.edits.length > 0) || (task.writes && task.writes.length > 0)) {
+        return this.claudeChangeset(task);
+      }
+
       const sorted = [...tasks].sort(
         (a, b) => a.createdAt - b.createdAt
       );
@@ -187,6 +199,11 @@ export class Tracker {
     }
 
     if (task.source === "cursor") {
+      // Hook-sourced tasks: use Claude-style rollback (exact edit reversal)
+      if ((task.edits && task.edits.length > 0) || (task.writes && task.writes.length > 0)) {
+        return this.selectiveRollbackClaude(task);
+      }
+
       const sorted = [...tasks].sort(
         (a, b) => a.createdAt - b.createdAt
       );
@@ -453,6 +470,41 @@ export class Tracker {
       const db = this.sessionReader.getPromptRailDB();
       const fullComposerId = db.findComposerIdByPrefix(shortId);
       if (!fullComposerId) return undefined;
+
+      // Try hook responses first (from Cursor hooks)
+      const te = task as TaskWithEdits;
+      if (te.generationId) {
+        const hookResp = this.sessionReader.getHookResponse(
+          fullComposerId,
+          te.generationId
+        );
+        if (hookResp) {
+          let md = `# Response\n\n`;
+          md += `> **Prompt:** ${task.prompt}\n\n---\n\n`;
+          md += hookResp;
+          return md;
+        }
+      } else {
+        // Look up generationId from prompt index
+        const genId = this.sessionReader.getHookGenerationId(
+          fullComposerId,
+          userIndex
+        );
+        if (genId) {
+          const hookResp = this.sessionReader.getHookResponse(
+            fullComposerId,
+            genId
+          );
+          if (hookResp) {
+            let md = `# Response\n\n`;
+            md += `> **Prompt:** ${task.prompt}\n\n---\n\n`;
+            md += hookResp;
+            return md;
+          }
+        }
+      }
+
+      // Fall back to shadow DB assistant bubbles
       const bubbles = db.getAssistantBubbles(fullComposerId);
       const forPrompt = bubbles.filter(
         (b: any) => b.userIndex === userIndex
@@ -522,5 +574,6 @@ export class Tracker {
     if (this.pollInterval) clearInterval(this.pollInterval);
     this.fileWatcher.dispose();
     this.onDidChangeEmitter.dispose();
+    this.sessionReader.getPromptRailDB().dispose();
   }
 }

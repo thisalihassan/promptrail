@@ -77,6 +77,21 @@ try {
   DatabaseSync = undefined;
 }
 
+/**
+ * Determines whether the shadow DB needs a re-snapshot.
+ * Triggers when new user bubbles appear OR when Cursor's DB has more
+ * readable assistant bubbles than the shadow DB (catches the case where
+ * the initial snapshot ran while the AI was still generating a response).
+ */
+export function shouldResnapshot(
+  cachedUserCount: number,
+  currentUserCount: number,
+  cachedAssistantCount: number,
+  readableAssistantCount: number
+): boolean {
+  return cachedUserCount < currentUserCount || cachedAssistantCount < readableAssistantCount;
+}
+
 const FILE_EDIT_TOOLS = new Set([
   "edit_file_v2",
   "write",
@@ -227,6 +242,7 @@ export class CursorHistory {
 
       // Per-prompt file whitelist from toolFormerData
       const perPromptFiles = new Map<number, Set<string>>();
+      let readableAssistantCount = 0;
       const stmt2 = db.prepare(
         "SELECT value FROM cursorDiskKV WHERE key = ?"
       );
@@ -245,6 +261,7 @@ export class CursorHistory {
               `bubbleId:${composerId}:${bubbles[bi].bubbleId}`
             );
             if (!bRow) continue;
+            readableAssistantCount++;
             const bData = JSON.parse(bRow.value);
             const tfd = bData.toolFormerData;
             if (!tfd || !FILE_EDIT_TOOLS.has(tfd.name)) continue;
@@ -278,7 +295,7 @@ export class CursorHistory {
       if (this.promptrailDb) {
         const cachedCount = this.promptrailDb.getCachedBubbleCount(composerId);
         const cachedAssistantCount = this.promptrailDb.getCachedAssistantBubbleCount(composerId);
-        if (cachedCount < userBubbleIds.length || cachedAssistantCount === 0) {
+        if (shouldResnapshot(cachedCount, userBubbleIds.length, cachedAssistantCount, readableAssistantCount)) {
           this.snapshotToPromptRailDB(
             composerId, data, session, bubbles, userBubbleIndices,
             timestamps, perPromptFiles, files, db

@@ -25,6 +25,101 @@ export interface TaskWithEdits extends Task {
   toolEditedFiles?: Set<string>;
   /** All files the AI touched in this session (from originalFileStates + newlyCreatedFiles). */
   sessionEditedFiles?: Set<string>;
+  /** Hook-sourced generationId (Cursor hooks). Used to look up responses. */
+  generationId?: string;
+}
+
+/**
+ * Claude Code injects internal messages into JSONL that are not real
+ * user prompts: slash commands (/plugin, /help), command output, meta
+ * caveats, and task notifications. Returns true if the content should
+ * be skipped during prompt extraction.
+ */
+export function isClaudeInternalMessage(content: string): boolean {
+  const trimmed = content.trimStart();
+  return (
+    trimmed.startsWith("<command-name>") ||
+    trimmed.startsWith("<local-command-stdout>") ||
+    trimmed.startsWith("<local-command-caveat>") ||
+    trimmed.startsWith("<local-command-stderr>") ||
+    trimmed.startsWith("<task-notification>")
+  );
+}
+
+/**
+ * Resolves toolEditedFiles for a prompt in the SQLite-first path.
+ * When per-prompt file data is available for the session (at least one
+ * prompt has file edits in toolFormerData), an empty Set means "this
+ * prompt edited no files" (authoritative). Without per-prompt data,
+ * an empty Set is ambiguous, so we return undefined to trigger the
+ * session-level fallback.
+ */
+export function resolveToolEditedFiles(
+  files: Set<string>,
+  sessionHasPerPromptData: boolean
+): Set<string> | undefined {
+  if (sessionHasPerPromptData) return files;
+  return files.size > 0 ? files : undefined;
+}
+
+/**
+ * Filters watcher-detected files through the appropriate whitelist.
+ * When toolEditedFiles is defined (even empty), it is authoritative —
+ * an empty Set means "this prompt edited no files" (not "unknown").
+ * Only falls back to sessionEditedFiles when toolEditedFiles is undefined.
+ */
+export function applyFileWhitelist(
+  files: string[],
+  toolEditedFiles: Set<string> | undefined,
+  sessionEditedFiles: Set<string> | undefined
+): string[] {
+  if (toolEditedFiles !== undefined) {
+    return files.filter((f) => toolEditedFiles.has(f));
+  }
+  if (sessionEditedFiles && sessionEditedFiles.size > 0) {
+    return files.filter((f) => sessionEditedFiles.has(f));
+  }
+  return files;
+}
+
+/**
+ * Spreads timestamps across a session range when they're missing or collapsed.
+ * Handles: undefined raw (all missing), all-same values (Cursor resets on
+ * session switch), and individual duplicates.
+ */
+export function deduplicateTimestamps(
+  raw: number[] | undefined,
+  promptCount: number,
+  fallbackStart: number,
+  fallbackEnd: number
+): number[] {
+  let useRaw = raw !== undefined && raw.length > 0;
+  if (useRaw) {
+    const nonZero = raw!.filter((t) => t > 0);
+    if (nonZero.length > 1) {
+      const allSame = nonZero.every((t) => t === nonZero[0]);
+      if (allSame) useRaw = false;
+    }
+  }
+
+  const result: number[] = [];
+  const span = Math.max(fallbackEnd - fallbackStart, promptCount);
+
+  for (let i = 0; i < promptCount; i++) {
+    const ts =
+      useRaw && raw![i] && raw![i] > 0
+        ? raw![i]
+        : fallbackStart + (span * i) / Math.max(promptCount - 1, 1);
+    result.push(ts);
+  }
+
+  for (let i = 1; i < result.length; i++) {
+    if (result[i] <= result[i - 1]) {
+      result[i] = result[i - 1] + 1;
+    }
+  }
+
+  return result;
 }
 
 export class SessionReader {
@@ -128,6 +223,28 @@ export class SessionReader {
     } catch {
       return undefined;
     }
+  }
+
+  getHookResponse(
+    conversationId: string,
+    generationId: string
+  ): string | undefined {
+    return this.promptrailDb.getHookResponseForGeneration(
+      conversationId,
+      generationId
+    );
+  }
+
+  /**
+   * Looks up the generationId for the Nth hook prompt in a conversation.
+   */
+  getHookGenerationId(
+    conversationId: string,
+    promptIndex: number
+  ): string | undefined {
+    const prompts = this.promptrailDb.getHookPrompts(conversationId);
+    if (promptIndex < prompts.length) return prompts[promptIndex].generationId;
+    return undefined;
   }
 
   // ── Claude Code ──────────────────────────────────────────
@@ -250,10 +367,15 @@ export class SessionReader {
   }
 
   private extractClaudePrompt(obj: any): string {
+    if (obj.isMeta) return "";
+
     const msg = obj.message || {};
     const content = typeof msg === "object" ? msg.content : "";
 
-    if (typeof content === "string" && content.length > 2) return content;
+    if (typeof content === "string" && content.length > 2) {
+      if (isClaudeInternalMessage(content)) return "";
+      return content;
+    }
 
     if (Array.isArray(content)) {
       for (const c of content) {
@@ -261,8 +383,10 @@ export class SessionReader {
           c?.type === "text" &&
           typeof c.text === "string" &&
           c.text.length > 2
-        )
+        ) {
+          if (isClaudeInternalMessage(c.text)) return "";
           return c.text;
+        }
         if (c?.type === "tool_result") return "";
       }
     }
@@ -291,32 +415,66 @@ export class SessionReader {
   }
 
   private readCursorSessions(): TaskWithEdits[] {
-    const dir = this.getCursorTranscriptsDir();
-    if (!dir) return [];
-
     const tasks: TaskWithEdits[] = [];
-    for (const entry of fs.readdirSync(dir)) {
-      const transcriptDir = path.join(dir, entry);
-      try {
-        if (!fs.statSync(transcriptDir).isDirectory()) continue;
-      } catch {
-        continue;
-      }
+    const processedConversations = new Set<string>();
 
-      const jsonlFile = path.join(transcriptDir, `${entry}.jsonl`);
-      if (!fs.existsSync(jsonlFile)) continue;
+    // JSONL-based discovery (existing path)
+    const dir = this.getCursorTranscriptsDir();
+    if (dir) {
+      for (const entry of fs.readdirSync(dir)) {
+        const transcriptDir = path.join(dir, entry);
+        try {
+          if (!fs.statSync(transcriptDir).isDirectory()) continue;
+        } catch {
+          continue;
+        }
 
-      const composerId = entry;
-      const session = this.cursorHistory.getComposerSession(composerId);
+        const jsonlFile = path.join(transcriptDir, `${entry}.jsonl`);
+        if (!fs.existsSync(jsonlFile)) continue;
 
-      try {
-        tasks.push(
-          ...this.parseCursorSession(jsonlFile, composerId, session)
-        );
-      } catch {
-        continue;
+        const composerId = entry;
+        processedConversations.add(composerId);
+
+        // Prefer hook data when available
+        const hookPrompts = this.promptrailDb.getHookPrompts(composerId);
+        if (hookPrompts.length > 0) {
+          try {
+            tasks.push(...this.parseCursorFromHooks(composerId, hookPrompts));
+          } catch {
+            // Fall through to existing parsing on error
+            const session = this.cursorHistory.getComposerSession(composerId);
+            try {
+              tasks.push(
+                ...this.parseCursorSession(jsonlFile, composerId, session)
+              );
+            } catch {}
+          }
+          continue;
+        }
+
+        const session = this.cursorHistory.getComposerSession(composerId);
+        try {
+          tasks.push(
+            ...this.parseCursorSession(jsonlFile, composerId, session)
+          );
+        } catch {
+          continue;
+        }
       }
     }
+
+    // Hook-only sessions (conversations in hook tables not in JSONL)
+    const hookConversationIds = this.promptrailDb.getHookConversationIds();
+    for (const convId of hookConversationIds) {
+      if (processedConversations.has(convId)) continue;
+      const hookPrompts = this.promptrailDb.getHookPrompts(convId);
+      if (hookPrompts.length > 0) {
+        try {
+          tasks.push(...this.parseCursorFromHooks(convId, hookPrompts));
+        } catch {}
+      }
+    }
+
     return tasks;
   }
 
@@ -335,36 +493,7 @@ export class SessionReader {
     fallbackStart: number,
     fallbackEnd: number
   ): number[] {
-    // Detect collapsed timestamps: if all non-zero raw values are identical
-    // (Cursor resets them on session switch/restart), treat as missing.
-    let useRaw = raw && raw.length > 0;
-    if (useRaw) {
-      const nonZero = raw!.filter((t) => t > 0);
-      if (nonZero.length > 1) {
-        const allSame = nonZero.every((t) => t === nonZero[0]);
-        if (allSame) useRaw = false;
-      }
-    }
-
-    const result: number[] = [];
-    const span = Math.max(fallbackEnd - fallbackStart, promptCount);
-
-    for (let i = 0; i < promptCount; i++) {
-      const ts =
-        useRaw && raw![i] && raw![i] > 0
-          ? raw![i]
-          : fallbackStart +
-            (span * i) / Math.max(promptCount - 1, 1);
-      result.push(ts);
-    }
-
-    for (let i = 1; i < result.length; i++) {
-      if (result[i] <= result[i - 1]) {
-        result[i] = result[i - 1] + 1;
-      }
-    }
-
-    return result;
+    return deduplicateTimestamps(raw, promptCount, fallbackStart, fallbackEnd);
   }
 
   private parseCursorSession(
@@ -407,6 +536,8 @@ export class SessionReader {
       sessionFileSet.add(fi.relativePath);
     }
 
+    const hasPerPromptData = bubbleData.some(b => b.files.size > 0);
+
     for (let i = 0; i < bubbleData.length; i++) {
       const b = bubbleData[i];
       tasks.push({
@@ -420,7 +551,7 @@ export class SessionReader {
         promptIndex: i,
         model: session?.model,
         mode: session?.mode,
-        toolEditedFiles: b.files.size > 0 ? b.files : undefined,
+        toolEditedFiles: resolveToolEditedFiles(b.files, hasPerPromptData),
         sessionEditedFiles: sessionFileSet,
       });
     }
@@ -443,6 +574,79 @@ export class SessionReader {
 
     if (session && session.lastUpdatedAt > 0) {
       tasks[tasks.length - 1].completedAt = session.lastUpdatedAt;
+    }
+
+    return tasks;
+  }
+
+  private parseCursorFromHooks(
+    conversationId: string,
+    hookPrompts: Array<{
+      generationId: string;
+      promptText: string;
+      model: string | null;
+      timestamp: number;
+    }>
+  ): TaskWithEdits[] {
+    const tasks: TaskWithEdits[] = [];
+    const allEdits = this.promptrailDb.getHookEdits(conversationId);
+
+    // Group edits by generationId
+    const editsByGen = new Map<
+      string,
+      Array<{
+        filePath: string;
+        oldString: string | null;
+        newString: string | null;
+      }>
+    >();
+    for (const e of allEdits) {
+      if (!editsByGen.has(e.generationId))
+        editsByGen.set(e.generationId, []);
+      editsByGen.get(e.generationId)!.push(e);
+    }
+
+    for (let i = 0; i < hookPrompts.length; i++) {
+      const p = hookPrompts[i];
+      const genEdits = editsByGen.get(p.generationId) || [];
+
+      const editRecords: EditRecord[] = [];
+      const writeRecords: WriteRecord[] = [];
+      const filesChanged: string[] = [];
+
+      for (const e of genEdits) {
+        if (e.oldString === null && e.newString === null) continue;
+        if (!filesChanged.includes(e.filePath)) filesChanged.push(e.filePath);
+
+        if (
+          (e.oldString === "" || e.oldString === null) &&
+          e.newString
+        ) {
+          // Write: new file or full content replace
+          writeRecords.push({ file: e.filePath, content: e.newString });
+        } else if (e.oldString && e.newString != null) {
+          editRecords.push({
+            file: e.filePath,
+            oldString: e.oldString,
+            newString: e.newString,
+          });
+        }
+      }
+
+      tasks.push({
+        id: `cur-${conversationId.slice(0, 8)}-${i}`,
+        prompt: (p.promptText || "(empty)").slice(0, 500),
+        createdAt: p.timestamp,
+        status: i < hookPrompts.length - 1 ? "completed" : "active",
+        filesChanged,
+        source: "cursor",
+        sessionId: conversationId,
+        promptIndex: i,
+        model: p.model || undefined,
+        generationId: p.generationId,
+        edits: editRecords.length > 0 ? editRecords : undefined,
+        writes: writeRecords.length > 0 ? writeRecords : undefined,
+      });
     }
 
     return tasks;

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import { SessionReader, type TaskWithEdits } from "../core/session-reader";
+import { SessionReader, applyFileWhitelist, type TaskWithEdits } from "../core/session-reader";
+import { mergeChangesInWindow } from "../core/change-merge";
 import type { Task, FileChange } from "../models/types";
 import {
   exportSessions,
@@ -13,6 +14,7 @@ import {
   selectiveRevert,
   revertStringEdits,
 } from "../core/selective-revert";
+import { ensureCursorHooks } from "../core/ensure-hooks";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -87,8 +89,14 @@ function filterTasks(tasks: Task[], flags: Flags): Task[] {
 }
 
 function readSnapshots(
-  wsRoot: string
+  wsRoot: string,
+  reader?: SessionReader
 ): { relPath: string; before: string; after: string; timestamp: number }[] {
+  if (reader) {
+    const db = reader.getPromptRailDB();
+    const fromDb = db.getAllFileChanges();
+    if (fromDb.length > 0) return fromDb;
+  }
   const filePath = path.join(wsRoot, ".promptrail", "snapshots", "changes.json");
   if (!fs.existsSync(filePath)) return [];
   try {
@@ -104,42 +112,14 @@ function getChangesInWindow(
   endTs: number,
   excludeWindows?: Array<{ start: number; end: number }>
 ): FileChange[] {
-  const inWindow = snapshots.filter((c) => {
-    if (c.timestamp < startTs || c.timestamp >= endTs) return false;
-    if (excludeWindows) {
-      for (const w of excludeWindows) {
-        if (c.timestamp >= w.start && c.timestamp < w.end) return false;
-      }
-    }
-    return true;
-  });
-
-  const merged = new Map<string, { before: string; after: string }>();
-  for (const c of inWindow) {
-    const existing = merged.get(c.relPath);
-    if (!existing) {
-      merged.set(c.relPath, { before: c.before, after: c.after });
-    } else {
-      existing.after = c.after;
-    }
-  }
-
-  const changes: FileChange[] = [];
-  for (const [relPath, data] of merged) {
-    if (data.before === data.after) continue;
-    let type: FileChange["type"] = "modified";
-    if (data.before === "" && data.after !== "") type = "added";
-    else if (data.before !== "" && data.after === "") type = "deleted";
-    changes.push({ relativePath: relPath, type, before: data.before, after: data.after });
-  }
-  return changes;
+  return mergeChangesInWindow(snapshots, startTs, endTs, excludeWindows).changes;
 }
 
 function cmdTimeline(flags: Flags): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
   const tasks = reader.readAllTasks();
-  const snapshots = readSnapshots(wsRoot);
+  const snapshots = readSnapshots(wsRoot, reader);
 
   const filtered = filterTasks(tasks, flags);
   if (filtered.length === 0) {
@@ -160,20 +140,18 @@ function cmdTimeline(flags: Flags): void {
     const srcLabel = src === "cursor" ? `${BLUE}cursor${RESET}` : src === "claude" ? `${MAGENTA}claude${RESET}` : src === "vscode" ? `${GREEN}vscode${RESET}` : `${DIM}${src}${RESET}`;
 
     let files = t.filesChanged;
-    if (t.source === "cursor" && snapshots.length > 0) {
-      const te = t as TaskWithEdits;
-      const perPrompt = te.toolEditedFiles;
-      const session = te.sessionEditedFiles;
+    const te = t as TaskWithEdits;
+    const hookSourced = hasEditData(t);
+    if (t.source === "cursor" && !hookSourced && snapshots.length > 0) {
       const startTs = t.createdAt;
       const endTs = chronIdx + 1 < chronological.length ? chronological[chronIdx + 1].createdAt : Date.now();
       const changes = getChangesInWindow(snapshots, startTs, endTs);
       if (changes.length > 0) {
-        const whitelist = perPrompt && perPrompt.size > 0 ? perPrompt : session;
         const relPaths = changes.map((c) => c.relativePath);
-        files = whitelist && whitelist.size > 0 ? relPaths.filter((f) => whitelist.has(f)) : relPaths;
+        files = applyFileWhitelist(relPaths, te.toolEditedFiles, te.sessionEditedFiles);
       }
-      if (files.length === 0 && perPrompt && perPrompt.size > 0) {
-        files = [...perPrompt];
+      if (files.length === 0 && te.toolEditedFiles && te.toolEditedFiles.size > 0) {
+        files = [...te.toolEditedFiles];
       }
     }
 
@@ -219,8 +197,11 @@ function cmdDiff(selector: string, flags: Flags = { positional: [] }): void {
   const idx = sorted.indexOf(task);
   let changes: FileChange[] = [];
 
-  if (task.source === "cursor") {
-    const snapshots = readSnapshots(wsRoot);
+  const te = task as TaskWithEdits;
+  const hasHookEdits = (te.edits && te.edits.length > 0) || (te.writes && te.writes.length > 0);
+
+  if (task.source === "cursor" && !hasHookEdits) {
+    const snapshots = readSnapshots(wsRoot, reader);
     const allSorted = [...tasks].sort((a, b) => a.createdAt - b.createdAt);
     const scWindows: Array<{ start: number; end: number }> = [];
     for (let si = 0; si < allSorted.length; si++) {
@@ -234,11 +215,11 @@ function cmdDiff(selector: string, flags: Flags = { positional: [] }): void {
     const startTs = task.createdAt;
     const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
     changes = getChangesInWindow(snapshots, startTs, endTs, scWindows);
-    const whitelist = (task as TaskWithEdits).toolEditedFiles;
+    const whitelist = te.toolEditedFiles;
     if (whitelist) {
       changes = changes.filter((c) => whitelist.has(c.relativePath));
     }
-  } else if (task.source === "claude" || task.source === "vscode") {
+  } else if (task.source === "claude" || task.source === "vscode" || hasHookEdits) {
     const te = task as TaskWithEdits;
     if (te.edits) {
       for (const edit of te.edits) {
@@ -365,7 +346,7 @@ function cmdRollback(selector: string, hard = false): void {
   if (hard) {
     // Hard reset: restore files to exact state before this prompt
     const idx = sorted.indexOf(task);
-    const snapshots = readSnapshots(wsRoot);
+    const snapshots = readSnapshots(wsRoot, reader);
     const startTs = task.createdAt;
     const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
     let changes = getChangesInWindow(snapshots, startTs, endTs);
@@ -397,7 +378,7 @@ function cmdRollback(selector: string, hard = false): void {
         reverted++;
       }
     }
-  } else if (task.source === "claude" || task.source === "vscode") {
+  } else if (task.source === "claude" || task.source === "vscode" || hasEditData(task)) {
     const te = task as TaskWithEdits;
 
     // Revert writes (file creations)
@@ -451,7 +432,7 @@ function cmdRollback(selector: string, hard = false): void {
   } else {
     // Cursor or other: use watcher snapshots
     const idx = sorted.indexOf(task);
-    const snapshots = readSnapshots(wsRoot);
+    const snapshots = readSnapshots(wsRoot, reader);
     const startTs = task.createdAt;
     const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
     let changes = getChangesInWindow(snapshots, startTs, endTs);
@@ -558,6 +539,27 @@ function cmdResponse(selector: string, flags: Flags = { positional: [] }): void 
       console.log(`${DIM}No response data available for this prompt.${RESET}`);
       return;
     }
+
+    // Try hook responses first (from Cursor hooks)
+    const te = task as TaskWithEdits;
+    let hookResp: string | undefined;
+    if (te.generationId) {
+      hookResp = reader.getHookResponse(fullComposerId, te.generationId);
+    } else {
+      const genId = reader.getHookGenerationId(fullComposerId, userIndex);
+      if (genId) {
+        hookResp = reader.getHookResponse(fullComposerId, genId);
+      }
+    }
+
+    if (hookResp) {
+      console.log(`${BOLD}Response for #${idx}:${RESET} ${truncate(task.prompt, 70)}`);
+      console.log(`${DIM}${timeAgo(task.createdAt)} | ${task.source}${RESET}\n`);
+      console.log(hookResp);
+      return;
+    }
+
+    // Fall back to shadow DB assistant bubbles
     const bubbles = db.getAssistantBubbles(fullComposerId);
     const forPrompt = bubbles.filter((b: any) => b.userIndex === userIndex);
 
@@ -780,6 +782,11 @@ function cmdSearch(query: string, flags: Flags): void {
   console.log(`\n${DIM}Use: promptrail diff <#>  or  promptrail rollback <#>${RESET}`);
 }
 
+function hasEditData(task: Task): boolean {
+  const te = task as TaskWithEdits;
+  return (te.edits != null && te.edits.length > 0) || (te.writes != null && te.writes.length > 0);
+}
+
 function resolveTask(sorted: Task[], selector: string): Task | undefined {
   const num = parseInt(selector, 10);
   if (!isNaN(num) && num >= 0 && num < sorted.length) {
@@ -901,11 +908,26 @@ function cmdImport(flags: Flags): void {
   console.log(`\n${GREEN}Import complete.${RESET}`);
 }
 
+function cmdInit(): void {
+  const wsRoot = getWorkspaceRoot();
+  const created = ensureCursorHooks(wsRoot);
+  if (created) {
+    console.log(`${GREEN}Cursor hooks installed:${RESET}`);
+    console.log(`  ${DIM}.cursor/hooks/promptrail-hook.js${RESET}`);
+    console.log(`  ${DIM}.cursor/hooks.json${RESET}`);
+    console.log(`\n${DIM}Hook events: afterFileEdit, beforeSubmitPrompt, afterAgentResponse, stop${RESET}`);
+    console.log(`${DIM}Edit data will be captured per-prompt for rollback + diff.${RESET}`);
+  } else {
+    console.log(`${DIM}Cursor hooks already configured.${RESET}`);
+  }
+}
+
 function printHelp(): void {
   console.log(`
 ${BOLD}Promptrail${RESET} — prompt-level version control for AI code editing
 
 ${BOLD}Usage:${RESET}
+  promptrail init                    Install Cursor hooks for per-prompt tracking
   promptrail timeline [--files]     Show all prompts with file change counts
   promptrail timeline -n 20         Show only the last 20 prompts
   promptrail diff <n|text>          Show diff for prompt #n or matching text
@@ -924,6 +946,7 @@ ${BOLD}Filters (work with timeline, sessions, diff):${RESET}
   --last, -n <count>               Show only the last N prompts
 
 ${BOLD}Examples:${RESET}
+  promptrail init                    Install Cursor hooks (auto-runs on first use)
   promptrail timeline               List all prompts
   promptrail timeline -n 10         Last 10 prompts
   promptrail timeline --files       Include file lists
@@ -951,7 +974,15 @@ const rawArgs = process.argv.slice(2);
 const command = rawArgs[0];
 const flags = parseFlags(rawArgs.slice(1));
 
+// Auto-provision Cursor hooks on first use (silent, non-blocking)
+if (command && command !== "init" && command !== "--help" && command !== "-h" && command !== "--version" && command !== "-v") {
+  try { ensureCursorHooks(getWorkspaceRoot()); } catch {}
+}
+
 switch (command) {
+  case "init":
+    cmdInit();
+    break;
   case "timeline":
   case "tl":
     cmdTimeline(flags);

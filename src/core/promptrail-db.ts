@@ -101,6 +101,48 @@ const SCHEMA = `
     isNewlyCreated    INTEGER DEFAULT 0,
     PRIMARY KEY (composerId, filePath)
   );
+
+  CREATE TABLE IF NOT EXISTS file_changes (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    relPath   TEXT NOT NULL,
+    before    TEXT,
+    after     TEXT,
+    timestamp REAL NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_fc_timestamp ON file_changes(timestamp);
+
+  CREATE TABLE IF NOT EXISTS hook_prompts (
+    conversationId TEXT NOT NULL,
+    generationId   TEXT NOT NULL,
+    promptText     TEXT NOT NULL,
+    model          TEXT,
+    timestamp      REAL NOT NULL,
+    PRIMARY KEY (conversationId, generationId)
+  );
+
+  CREATE TABLE IF NOT EXISTS hook_edits (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversationId  TEXT NOT NULL,
+    generationId    TEXT NOT NULL,
+    filePath        TEXT NOT NULL,
+    oldString       TEXT,
+    newString       TEXT,
+    timestamp       REAL NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_hook_edits_gen
+    ON hook_edits(conversationId, generationId);
+
+  CREATE TABLE IF NOT EXISTS hook_responses (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversationId  TEXT NOT NULL,
+    generationId    TEXT NOT NULL,
+    responseText    TEXT NOT NULL,
+    model           TEXT,
+    timestamp       REAL NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_hook_responses_gen
+    ON hook_responses(conversationId, generationId);
 `;
 
 export interface SearchResult {
@@ -128,6 +170,7 @@ export class PromptRailDB {
     if (!DatabaseSync) return;
     try {
       this.db = new DatabaseSync(this.dbPath);
+      this.db.exec("PRAGMA journal_mode=WAL");
       this.db.exec(SCHEMA);
       this.initFts();
     } catch {
@@ -522,6 +565,211 @@ export class PromptRailDB {
       });
     } catch {
       return [];
+    }
+  }
+
+  insertFileChange(
+    relPath: string,
+    before: string,
+    after: string,
+    timestamp: number
+  ): void {
+    if (!this.db) return;
+    try {
+      this.db
+        .prepare(
+          "INSERT INTO file_changes (relPath, before, after, timestamp) VALUES (?, ?, ?, ?)"
+        )
+        .run(relPath, before, after, timestamp);
+    } catch {}
+  }
+
+  insertFileChangesBatch(
+    changes: Array<{
+      relPath: string;
+      before: string;
+      after: string;
+      timestamp: number;
+    }>
+  ): void {
+    if (!this.db || changes.length === 0) return;
+    try {
+      this.db.exec("BEGIN TRANSACTION");
+      const stmt = this.db.prepare(
+        "INSERT INTO file_changes (relPath, before, after, timestamp) VALUES (?, ?, ?, ?)"
+      );
+      for (const c of changes) {
+        stmt.run(c.relPath, c.before, c.after, c.timestamp);
+      }
+      this.db.exec("COMMIT");
+    } catch {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {}
+    }
+  }
+
+  getChangesInRange(
+    startTs: number,
+    endTs: number
+  ): Array<{
+    relPath: string;
+    before: string;
+    after: string;
+    timestamp: number;
+  }> {
+    if (!this.db) return [];
+    try {
+      return this.db
+        .prepare(
+          "SELECT relPath, before, after, timestamp FROM file_changes WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp"
+        )
+        .all(startTs, endTs);
+    } catch {
+      return [];
+    }
+  }
+
+  getAllFileChanges(): Array<{
+    relPath: string;
+    before: string;
+    after: string;
+    timestamp: number;
+  }> {
+    if (!this.db) return [];
+    try {
+      return this.db
+        .prepare(
+          "SELECT relPath, before, after, timestamp FROM file_changes ORDER BY timestamp"
+        )
+        .all();
+    } catch {
+      return [];
+    }
+  }
+
+  pruneOldChanges(cutoffTs: number): number {
+    if (!this.db) return 0;
+    try {
+      const result = this.db
+        .prepare("DELETE FROM file_changes WHERE timestamp < ?")
+        .run(cutoffTs);
+      return result.changes || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  getFileChangeCount(): number {
+    if (!this.db) return 0;
+    try {
+      const row = this.db
+        .prepare("SELECT COUNT(*) as cnt FROM file_changes")
+        .get();
+      return row?.cnt || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  // ── Hook table queries ──────────────────────────────────
+
+  getHookConversationIds(): string[] {
+    if (!this.db) return [];
+    try {
+      const rows = this.db
+        .prepare("SELECT DISTINCT conversationId FROM hook_prompts")
+        .all();
+      return rows.map((r: any) => r.conversationId);
+    } catch {
+      return [];
+    }
+  }
+
+  getHookPrompts(
+    conversationId: string
+  ): Array<{
+    generationId: string;
+    promptText: string;
+    model: string | null;
+    timestamp: number;
+  }> {
+    if (!this.db) return [];
+    try {
+      return this.db
+        .prepare(
+          `SELECT generationId, promptText, model, timestamp
+           FROM hook_prompts WHERE conversationId = ?
+           ORDER BY timestamp`
+        )
+        .all(conversationId);
+    } catch {
+      return [];
+    }
+  }
+
+  getHookEdits(
+    conversationId: string
+  ): Array<{
+    generationId: string;
+    filePath: string;
+    oldString: string | null;
+    newString: string | null;
+    timestamp: number;
+  }> {
+    if (!this.db) return [];
+    try {
+      return this.db
+        .prepare(
+          `SELECT generationId, filePath, oldString, newString, timestamp
+           FROM hook_edits WHERE conversationId = ?
+           ORDER BY timestamp`
+        )
+        .all(conversationId);
+    } catch {
+      return [];
+    }
+  }
+
+  getHookResponses(
+    conversationId: string
+  ): Array<{
+    generationId: string;
+    responseText: string;
+    model: string | null;
+    timestamp: number;
+  }> {
+    if (!this.db) return [];
+    try {
+      return this.db
+        .prepare(
+          `SELECT generationId, responseText, model, timestamp
+           FROM hook_responses WHERE conversationId = ?
+           ORDER BY timestamp`
+        )
+        .all(conversationId);
+    } catch {
+      return [];
+    }
+  }
+
+  getHookResponseForGeneration(
+    conversationId: string,
+    generationId: string
+  ): string | undefined {
+    if (!this.db) return undefined;
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT responseText FROM hook_responses
+           WHERE conversationId = ? AND generationId = ?
+           ORDER BY timestamp`
+        )
+        .all(conversationId, generationId);
+      if (rows.length === 0) return undefined;
+      return rows.map((r: any) => r.responseText).join("\n\n");
+    } catch {
+      return undefined;
     }
   }
 

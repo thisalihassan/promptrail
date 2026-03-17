@@ -5,6 +5,7 @@ import * as fs from "fs";
 import { Tracker } from "./core/tracker";
 import { TimelineProvider } from "./views/timeline-provider";
 import { ConversationExporter } from "./core/exporter";
+import { ensureCursorHooks } from "./core/ensure-hooks";
 
 let tracker: Tracker | undefined;
 
@@ -14,6 +15,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const workspaceRoot = workspaceFolder.uri.fsPath;
   ensureGitExclude(workspaceRoot);
+  try { ensureCursorHooks(workspaceRoot); } catch {}
   tracker = new Tracker(workspaceRoot);
 
   const timelineProvider = new TimelineProvider(
@@ -252,10 +254,19 @@ function ensureGitExclude(workspaceRoot: string): void {
       ? fs.readFileSync(excludePath, "utf-8")
       : "";
 
-    if (content.includes(".promptrail")) return;
+    let toAdd = "";
 
-    const line = "\n.promptrail/\n";
-    fs.writeFileSync(excludePath, content.trimEnd() + line, "utf-8");
+    if (!content.includes(".promptrail")) {
+      toAdd += "\n.promptrail/\n";
+    }
+    else if (!content.includes(".cursor/hooks/promptrail-hook.js")) {
+      toAdd += "\n.cursor/hooks/promptrail-hook.js\n";
+      toAdd += "\n.cursor/hooks.json\n";
+    };
+
+    if(!toAdd) return;
+
+    fs.writeFileSync(excludePath, content.trimEnd() + toAdd, "utf-8");
   } catch {}
 }
 

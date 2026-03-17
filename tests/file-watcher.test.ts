@@ -6,6 +6,7 @@ import * as os from "os";
 import {
   loadGitignorePatterns,
   shouldTrackFile,
+  mergeChangesInWindow,
   ALWAYS_IGNORE,
   NEVER_IGNORE,
   type IgnorePatterns,
@@ -167,128 +168,116 @@ describe("shouldTrackFile", () => {
   });
 });
 
-describe("getChangesInWindow (via fixture data)", () => {
-  it("returns changes within timestamp window", () => {
-    const changes = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "fixtures", "changes.json"),
-        "utf-8"
-      )
-    );
+describe("mergeChangesInWindow (real function)", () => {
+  let fixtureChanges: Array<{ relPath: string; before: string; after: string; timestamp: number }>;
 
-    const inWindow = changes.filter(
-      (c: any) => c.timestamp >= 1773100040000 && c.timestamp < 1773100100000
+  before(() => {
+    fixtureChanges = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "fixtures", "changes.json"), "utf-8")
     );
-
-    assert.strictEqual(inWindow.length, 2, "Should find 2 changes for app.ts in window");
-    assert.ok(inWindow.every((c: any) => c.relPath === "src/app.ts"));
   });
 
-  it("merges multiple edits to same file: first before, last after", () => {
-    const changes = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "fixtures", "changes.json"),
-        "utf-8"
-      )
-    );
+  it("returns only changes within the timestamp window", () => {
+    const { files } = mergeChangesInWindow(fixtureChanges, 1773100040000, 1773100100000);
+    assert.strictEqual(files.length, 1);
+    assert.ok(files.includes("src/app.ts"));
+  });
 
-    const inWindow = changes.filter(
-      (c: any) => c.timestamp >= 1773100040000 && c.timestamp < 1773100100000
-    );
-
-    const merged = new Map<string, { before: string; after: string }>();
-    for (const c of inWindow) {
-      const existing = merged.get(c.relPath);
-      if (!existing) {
-        merged.set(c.relPath, { before: c.before, after: c.after });
-      } else {
-        existing.after = c.after;
-      }
-    }
-
-    const appTs = merged.get("src/app.ts");
+  it("merges multiple edits: first before, last after", () => {
+    const { changes } = mergeChangesInWindow(fixtureChanges, 1773100040000, 1773100100000);
+    const appTs = changes.find((c) => c.relativePath === "src/app.ts");
     assert.ok(appTs);
-    assert.ok(appTs!.before.includes('"hello"'), "Before should be the first version");
-    assert.ok(appTs!.after.includes('"hello world!"'), "After should be the last version");
+    assert.ok(appTs!.before!.includes('"hello"'), "Before should be the first version");
+    assert.ok(appTs!.after!.includes('"hello world!"'), "After should be the last version");
   });
 
-  it("Claude window exclusion filters out overlapping changes", () => {
-    const changes = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "fixtures", "changes.json"),
-        "utf-8"
-      )
-    );
-
-    const claudeWindows = [{ start: 1773100200000, end: 1773100300000 }];
-
-    const cursorWindowStart = 1773100000000;
-    const cursorWindowEnd = 1773100400000;
-
-    const inWindow = changes.filter((c: any) => {
-      if (c.timestamp < cursorWindowStart || c.timestamp >= cursorWindowEnd)
-        return false;
-      for (const w of claudeWindows) {
-        if (c.timestamp >= w.start && c.timestamp < w.end) return false;
-      }
-      return true;
-    });
-
-    const claudePluginChanges = inWindow.filter((c: any) =>
-      c.relPath.startsWith("claude-plugin/")
-    );
-    assert.strictEqual(
-      claudePluginChanges.length,
-      0,
-      "Claude plugin changes at 1773100250000 should be excluded (inside Claude window)"
-    );
-
-    assert.ok(inWindow.length > 0, "Should still have non-Claude changes");
+  it("excludeWindows filters out overlapping changes", () => {
+    const excludeWindows = [{ start: 1773100200000, end: 1773100300000 }];
+    const { files } = mergeChangesInWindow(fixtureChanges, 1773100000000, 1773100400000, excludeWindows);
+    assert.ok(!files.includes("claude-plugin/hooks.json"),
+      "Claude plugin change at 1773100250000 should be excluded");
+    assert.ok(files.length > 0, "Should still have non-excluded changes");
   });
 
   it("empty window returns no changes", () => {
-    const changes = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "fixtures", "changes.json"),
-        "utf-8"
-      )
-    );
-
-    const inWindow = changes.filter(
-      (c: any) => c.timestamp >= 9999999999999 && c.timestamp < 9999999999999
-    );
-    assert.strictEqual(inWindow.length, 0);
+    const { files, changes } = mergeChangesInWindow(fixtureChanges, 9999999999999, 9999999999999);
+    assert.strictEqual(files.length, 0);
+    assert.strictEqual(changes.length, 0);
   });
 
-  it("detects file deletions (after is empty string)", () => {
-    const changes = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "fixtures", "changes.json"),
-        "utf-8"
-      )
-    );
-
-    const deletion = changes.find(
-      (c: any) => c.relPath === "src/deleted.ts"
-    );
+  it("detects file deletions (before has content, after is empty)", () => {
+    const { changes } = mergeChangesInWindow(fixtureChanges, 1773100300000, 1773100400000);
+    const deletion = changes.find((c) => c.relativePath === "src/deleted.ts");
     assert.ok(deletion);
-    assert.strictEqual(deletion.before, "// old code\n");
-    assert.strictEqual(deletion.after, "");
+    assert.strictEqual(deletion!.type, "deleted");
+    assert.strictEqual(deletion!.before, "// old code\n");
+    assert.strictEqual(deletion!.after, "");
   });
 
-  it("detects file creation (before is empty string)", () => {
-    const changes = JSON.parse(
-      fs.readFileSync(
-        path.join(__dirname, "fixtures", "changes.json"),
-        "utf-8"
-      )
-    );
-
-    const creation = changes.find(
-      (c: any) => c.relPath === "src/new-file.ts"
-    );
+  it("detects file creation (before is empty, after has content)", () => {
+    const { changes } = mergeChangesInWindow(fixtureChanges, 1773100120000, 1773100250000);
+    const creation = changes.find((c) => c.relativePath === "src/new-file.ts");
     assert.ok(creation);
-    assert.strictEqual(creation.before, "");
-    assert.ok(creation.after.includes("VERSION"));
+    assert.strictEqual(creation!.type, "added");
+    assert.strictEqual(creation!.before, "");
+    assert.ok(creation!.after!.includes("VERSION"));
+  });
+
+  it("skips no-op changes where before === after", () => {
+    const changes = [
+      { relPath: "noop.ts", before: "same", after: "same", timestamp: 500 },
+      { relPath: "real.ts", before: "old", after: "new", timestamp: 600 },
+    ];
+    const { files } = mergeChangesInWindow(changes, 0, 1000);
+    assert.ok(!files.includes("noop.ts"), "No-op should be filtered out");
+    assert.ok(files.includes("real.ts"));
+  });
+
+  it("rapid successive edits merge to first-before and last-after", () => {
+    const changes = [
+      { relPath: "rapid.ts", before: "v1", after: "v2", timestamp: 100 },
+      { relPath: "rapid.ts", before: "v2", after: "v3", timestamp: 101 },
+      { relPath: "rapid.ts", before: "v3", after: "v4", timestamp: 102 },
+    ];
+    const result = mergeChangesInWindow(changes, 0, 1000);
+    const rapid = result.changes.find((c) => c.relativePath === "rapid.ts");
+    assert.ok(rapid);
+    assert.strictEqual(rapid!.before, "v1");
+    assert.strictEqual(rapid!.after, "v4");
+  });
+
+  it("file created then deleted in same window = no net change", () => {
+    const changes = [
+      { relPath: "tmp.ts", before: "", after: "content", timestamp: 100 },
+      { relPath: "tmp.ts", before: "content", after: "", timestamp: 200 },
+    ];
+    const { files } = mergeChangesInWindow(changes, 0, 1000);
+    assert.ok(!files.includes("tmp.ts"), "Created then deleted = no net change");
+  });
+
+  it("interleaved edits to multiple files tracked independently", () => {
+    const changes = [
+      { relPath: "a.ts", before: "a1", after: "a2", timestamp: 100 },
+      { relPath: "b.ts", before: "b1", after: "b2", timestamp: 101 },
+      { relPath: "a.ts", before: "a2", after: "a3", timestamp: 102 },
+    ];
+    const result = mergeChangesInWindow(changes, 0, 1000);
+    const a = result.changes.find((c) => c.relativePath === "a.ts");
+    const b = result.changes.find((c) => c.relativePath === "b.ts");
+    assert.ok(a && b);
+    assert.strictEqual(a!.before, "a1");
+    assert.strictEqual(a!.after, "a3");
+    assert.strictEqual(b!.before, "b1");
+    assert.strictEqual(b!.after, "b2");
+  });
+
+  it("start is inclusive, end is exclusive", () => {
+    const changes = [
+      { relPath: "at-start.ts", before: "a", after: "b", timestamp: 100 },
+      { relPath: "at-end.ts", before: "c", after: "d", timestamp: 200 },
+    ];
+    const { files } = mergeChangesInWindow(changes, 100, 200);
+    assert.ok(files.includes("at-start.ts"), "Change at exact start should be included");
+    assert.ok(!files.includes("at-end.ts"), "Change at exact end should be excluded");
   });
 });
