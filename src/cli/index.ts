@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { SessionReader, applyFileWhitelist, type TaskWithEdits } from "../core/session-reader";
-import { mergeChangesInWindow } from "../core/change-merge";
+import { SessionReader, type TaskWithEdits } from "../core/session-reader";
 import type { Task, FileChange } from "../models/types";
 import {
   exportSessions,
@@ -11,7 +10,6 @@ import {
   type ExportData,
 } from "../core/migrator";
 import {
-  selectiveRevert,
   revertStringEdits,
 } from "../core/selective-revert";
 import { ensureCursorHooks } from "../core/ensure-hooks";
@@ -88,38 +86,10 @@ function filterTasks(tasks: Task[], flags: Flags): Task[] {
   return filtered;
 }
 
-function readSnapshots(
-  wsRoot: string,
-  reader?: SessionReader
-): { relPath: string; before: string; after: string; timestamp: number }[] {
-  if (reader) {
-    const db = reader.getPromptRailDB();
-    const fromDb = db.getAllFileChanges();
-    if (fromDb.length > 0) return fromDb;
-  }
-  const filePath = path.join(wsRoot, ".promptrail", "snapshots", "changes.json");
-  if (!fs.existsSync(filePath)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  } catch {
-    return [];
-  }
-}
-
-function getChangesInWindow(
-  snapshots: ReturnType<typeof readSnapshots>,
-  startTs: number,
-  endTs: number,
-  excludeWindows?: Array<{ start: number; end: number }>
-): FileChange[] {
-  return mergeChangesInWindow(snapshots, startTs, endTs, excludeWindows).changes;
-}
-
 function cmdTimeline(flags: Flags): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
   const tasks = reader.readAllTasks();
-  const snapshots = readSnapshots(wsRoot, reader);
 
   const filtered = filterTasks(tasks, flags);
   if (filtered.length === 0) {
@@ -139,22 +109,7 @@ function cmdTimeline(flags: Flags): void {
     const src = t.source || "unknown";
     const srcLabel = src === "cursor" ? `${BLUE}cursor${RESET}` : src === "claude" ? `${MAGENTA}claude${RESET}` : src === "vscode" ? `${GREEN}vscode${RESET}` : `${DIM}${src}${RESET}`;
 
-    let files = t.filesChanged;
-    const te = t as TaskWithEdits;
-    const hookSourced = hasEditData(t);
-    if (t.source === "cursor" && !hookSourced && snapshots.length > 0) {
-      const startTs = t.createdAt;
-      const endTs = chronIdx + 1 < chronological.length ? chronological[chronIdx + 1].createdAt : Date.now();
-      const changes = getChangesInWindow(snapshots, startTs, endTs);
-      if (changes.length > 0) {
-        const relPaths = changes.map((c) => c.relativePath);
-        files = applyFileWhitelist(relPaths, te.toolEditedFiles, te.sessionEditedFiles);
-      }
-      if (files.length === 0 && te.toolEditedFiles && te.toolEditedFiles.size > 0) {
-        files = [...te.toolEditedFiles];
-      }
-    }
-
+    const files = t.filesChanged;
     const hasFiles = files.length > 0;
     const dot = hasFiles ? `${GREEN}●${RESET}` : `${DIM}○${RESET}`;
     const fileCount = hasFiles
@@ -194,52 +149,27 @@ function cmdDiff(selector: string, flags: Flags = { positional: [] }): void {
     process.exit(1);
   }
 
-  const idx = sorted.indexOf(task);
   let changes: FileChange[] = [];
 
   const te = task as TaskWithEdits;
-  const hasHookEdits = (te.edits && te.edits.length > 0) || (te.writes && te.writes.length > 0);
-
-  if (task.source === "cursor" && !hasHookEdits) {
-    const snapshots = readSnapshots(wsRoot, reader);
-    const allSorted = [...tasks].sort((a, b) => a.createdAt - b.createdAt);
-    const scWindows: Array<{ start: number; end: number }> = [];
-    for (let si = 0; si < allSorted.length; si++) {
-      const s = allSorted[si].source;
-      if (s !== "claude" && s !== "vscode") continue;
-      scWindows.push({
-        start: allSorted[si].createdAt,
-        end: si + 1 < allSorted.length ? allSorted[si + 1].createdAt : Date.now(),
+  if (te.edits) {
+    for (const edit of te.edits) {
+      changes.push({
+        relativePath: edit.file,
+        type: "modified",
+        before: edit.oldString,
+        after: edit.newString,
       });
     }
-    const startTs = task.createdAt;
-    const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-    changes = getChangesInWindow(snapshots, startTs, endTs, scWindows);
-    const whitelist = te.toolEditedFiles;
-    if (whitelist) {
-      changes = changes.filter((c) => whitelist.has(c.relativePath));
-    }
-  } else if (task.source === "claude" || task.source === "vscode" || hasHookEdits) {
-    const te = task as TaskWithEdits;
-    if (te.edits) {
-      for (const edit of te.edits) {
-        changes.push({
-          relativePath: edit.file,
-          type: "modified",
-          before: edit.oldString,
-          after: edit.newString,
-        });
-      }
-    }
-    if (te.writes) {
-      for (const write of te.writes) {
-        changes.push({
-          relativePath: write.file,
-          type: "added",
-          before: "",
-          after: write.content,
-        });
-      }
+  }
+  if (te.writes) {
+    for (const write of te.writes) {
+      changes.push({
+        relativePath: write.file,
+        type: "added",
+        before: "",
+        after: write.content,
+      });
     }
   }
 
@@ -325,7 +255,7 @@ function printSimpleDiff(beforeLines: string[], afterLines: string[]): void {
   }
 }
 
-function cmdRollback(selector: string, hard = false): void {
+function cmdRollback(selector: string): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
   const tasks = reader.readAllTasks();
@@ -337,165 +267,64 @@ function cmdRollback(selector: string, hard = false): void {
     process.exit(1);
   }
 
-  const modeLabel = hard ? "Restore files" : "Cherry revert";
-  console.log(`${BOLD}${modeLabel}:${RESET} ${truncate(task.prompt, 70)}`);
+  console.log(`${BOLD}Cherry revert:${RESET} ${truncate(task.prompt, 70)}`);
 
   let reverted = 0;
   let conflicts = 0;
 
-  if (hard) {
-    // Hard reset: restore files to exact state before this prompt
-    const idx = sorted.indexOf(task);
-    const snapshots = readSnapshots(wsRoot, reader);
-    const startTs = task.createdAt;
-    const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-    let changes = getChangesInWindow(snapshots, startTs, endTs);
-    const whitelist = (task as TaskWithEdits).toolEditedFiles;
-    if (whitelist) {
-      changes = changes.filter((c) => whitelist.has(c.relativePath));
+  const te = task as TaskWithEdits;
+  const hasEdits = (te.edits && te.edits.length > 0) || (te.writes && te.writes.length > 0);
+
+  if (!hasEdits) {
+    console.log(`${DIM}No edit data available for this prompt. Rollback requires Cursor hooks or Claude/VS Code edit records.${RESET}`);
+    if (task.source === "cursor") {
+      console.log(`${DIM}Run \`promptrail init\` to install hooks for future sessions.${RESET}`);
     }
+    return;
+  }
 
-    if (changes.length === 0) {
-      console.log(`${DIM}No snapshot data to rollback for this prompt.${RESET}`);
-      return;
-    }
+  if (te.writes && te.writes.length > 0) {
+    for (const write of te.writes) {
+      const absPath = path.join(wsRoot, write.file);
+      let currentContent: string | undefined;
+      try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {}
 
-    console.log(`${DIM}Restoring ${changes.length} file(s) to pre-prompt state...${RESET}\n`);
-
-    for (const change of changes) {
-      const absPath = path.join(wsRoot, change.relativePath);
-      if (change.type === "added") {
-        if (fs.existsSync(absPath)) {
-          fs.unlinkSync(absPath);
-          console.log(`  ${RED}deleted${RESET} ${change.relativePath}`);
-          reverted++;
-        }
-      } else {
-        const dir = path.dirname(absPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(absPath, change.before ?? "", "utf-8");
-        console.log(`  ${YELLOW}restored${RESET} ${change.relativePath}`);
+      if (currentContent === undefined) continue;
+      if (currentContent === write.content) {
+        fs.unlinkSync(absPath);
+        console.log(`  ${RED}deleted${RESET} ${write.file}`);
         reverted++;
+      } else {
+        console.log(`  ${YELLOW}CONFLICT${RESET} ${write.file} — created by this prompt but later modified`);
+        conflicts++;
       }
     }
-  } else if (task.source === "claude" || task.source === "vscode" || hasEditData(task)) {
-    const te = task as TaskWithEdits;
+  }
 
-    // Revert writes (file creations)
-    if (te.writes && te.writes.length > 0) {
-      for (const write of te.writes) {
-        const absPath = path.join(wsRoot, write.file);
-        let currentContent: string | undefined;
-        try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {}
-
-        if (currentContent === undefined) continue;
-        if (currentContent === write.content) {
-          fs.unlinkSync(absPath);
-          console.log(`  ${RED}deleted${RESET} ${write.file}`);
-          reverted++;
-        } else {
-          console.log(`  ${YELLOW}CONFLICT${RESET} ${write.file} — created by this prompt but later modified`);
-          conflicts++;
-        }
-      }
+  if (te.edits && te.edits.length > 0) {
+    const byFile = new Map<string, Array<{ oldString: string; newString: string }>>();
+    for (const edit of te.edits) {
+      if (!byFile.has(edit.file)) byFile.set(edit.file, []);
+      byFile.get(edit.file)!.push({ oldString: edit.oldString, newString: edit.newString });
     }
 
-    // Revert edits with exact string matching
-    if (te.edits && te.edits.length > 0) {
-      const byFile = new Map<string, Array<{ oldString: string; newString: string }>>();
-      for (const edit of te.edits) {
-        if (!byFile.has(edit.file)) byFile.set(edit.file, []);
-        byFile.get(edit.file)!.push({ oldString: edit.oldString, newString: edit.newString });
-      }
-
-      for (const [file, edits] of byFile) {
-        const absPath = path.join(wsRoot, file);
-        let currentContent: string;
-        try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {
-          console.log(`  ${YELLOW}CONFLICT${RESET} ${file} — file no longer exists`);
-          conflicts++;
-          continue;
-        }
-
-        const result = revertStringEdits(currentContent, edits);
-        if (result.applied > 0) {
-          fs.writeFileSync(absPath, result.content, "utf-8");
-          console.log(`  ${GREEN}reverted${RESET} ${file} (${result.applied} edit${result.applied === 1 ? "" : "s"})`);
-          reverted++;
-        }
-        for (const c of result.conflicts) {
-          console.log(`  ${YELLOW}CONFLICT${RESET} ${file} — ${c.description}`);
-          conflicts++;
-        }
-      }
-    }
-  } else {
-    // Cursor or other: use watcher snapshots
-    const idx = sorted.indexOf(task);
-    const snapshots = readSnapshots(wsRoot, reader);
-    const startTs = task.createdAt;
-    const endTs = idx + 1 < sorted.length ? sorted[idx + 1].createdAt : Date.now();
-    let changes = getChangesInWindow(snapshots, startTs, endTs);
-    const whitelist = (task as TaskWithEdits).toolEditedFiles;
-    if (whitelist) {
-      changes = changes.filter((c) => whitelist.has(c.relativePath));
-    }
-
-    if (changes.length === 0) {
-      console.log(`${DIM}No snapshot data to rollback for this prompt.${RESET}`);
-      return;
-    }
-
-    console.log(`${DIM}Processing ${changes.length} file(s)...${RESET}\n`);
-
-    for (const change of changes) {
-      const absPath = path.join(wsRoot, change.relativePath);
-
-      if (change.type === "added") {
-        let currentContent: string | undefined;
-        try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {}
-        if (currentContent === undefined) continue;
-        if (currentContent === change.after) {
-          fs.unlinkSync(absPath);
-          console.log(`  ${RED}deleted${RESET} ${change.relativePath}`);
-          reverted++;
-        } else {
-          console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — created by this prompt but later modified`);
-          conflicts++;
-        }
-        continue;
-      }
-
-      if (change.type === "deleted") {
-        if (fs.existsSync(absPath)) {
-          console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — deleted by this prompt but recreated since`);
-          conflicts++;
-        } else {
-          const dir = path.dirname(absPath);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(absPath, change.before ?? "", "utf-8");
-          console.log(`  ${GREEN}recreated${RESET} ${change.relativePath}`);
-          reverted++;
-        }
-        continue;
-      }
-
-      // Modified file — selective revert
+    for (const [file, edits] of byFile) {
+      const absPath = path.join(wsRoot, file);
       let currentContent: string;
       try { currentContent = fs.readFileSync(absPath, "utf-8"); } catch {
-        console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — file no longer exists`);
+        console.log(`  ${YELLOW}CONFLICT${RESET} ${file} — file no longer exists`);
         conflicts++;
         continue;
       }
 
-      const result = selectiveRevert(change.before ?? "", change.after ?? "", currentContent);
+      const result = revertStringEdits(currentContent, edits);
       if (result.applied > 0) {
         fs.writeFileSync(absPath, result.content, "utf-8");
-        console.log(`  ${GREEN}reverted${RESET} ${change.relativePath} (${result.applied} hunk${result.applied === 1 ? "" : "s"})`);
+        console.log(`  ${GREEN}reverted${RESET} ${file} (${result.applied} edit${result.applied === 1 ? "" : "s"})`);
         reverted++;
       }
       for (const c of result.conflicts) {
-        console.log(`  ${YELLOW}CONFLICT${RESET} ${change.relativePath} — ${c.description}`);
+        console.log(`  ${YELLOW}CONFLICT${RESET} ${file} — ${c.description}`);
         conflicts++;
       }
     }
@@ -503,7 +332,7 @@ function cmdRollback(selector: string, hard = false): void {
 
   console.log();
   if (reverted > 0 && conflicts === 0) {
-    console.log(`${GREEN}${modeLabel} complete — ${reverted} file(s) reverted.${RESET}`);
+    console.log(`${GREEN}Cherry revert complete — ${reverted} file(s) reverted.${RESET}`);
   } else if (reverted > 0 && conflicts > 0) {
     console.log(`${YELLOW}Partial revert — ${reverted} file(s) reverted, ${conflicts} conflict(s).${RESET}`);
   } else if (conflicts > 0) {
@@ -782,10 +611,6 @@ function cmdSearch(query: string, flags: Flags): void {
   console.log(`\n${DIM}Use: promptrail diff <#>  or  promptrail rollback <#>${RESET}`);
 }
 
-function hasEditData(task: Task): boolean {
-  const te = task as TaskWithEdits;
-  return (te.edits != null && te.edits.length > 0) || (te.writes != null && te.writes.length > 0);
-}
 
 function resolveTask(sorted: Task[], selector: string): Task | undefined {
   const num = parseInt(selector, 10);
@@ -933,7 +758,7 @@ ${BOLD}Usage:${RESET}
   promptrail diff <n|text>          Show diff for prompt #n or matching text
   promptrail response <n|text>      Show AI response for prompt #n or matching text
   promptrail rollback <n|text>      Cherry revert (undo only this prompt's changes)
-  promptrail rollback <n|text> --hard  Restore files (restore to pre-prompt state)
+  promptrail rollback <n|text>         Cherry revert using edit data (hooks/Claude/VSCode)
   promptrail search <query>          Search prompts and responses (FTS5)
   promptrail sessions               List all sessions
   promptrail migrate <source-path>   Migrate all sessions from another workspace
@@ -960,7 +785,7 @@ ${BOLD}Examples:${RESET}
   promptrail search "auth" -m sonnet  Search with model filter
   promptrail sessions -s claude     Only Claude Code sessions
   promptrail rollback 5             Cherry revert prompt #5
-  promptrail rollback 5 --hard      Restore files for prompt #5 (overwrites later changes)
+  promptrail rollback 5             Cherry revert prompt #5 using exact edit reversal
   promptrail migrate ../old-project  Migrate sessions from old workspace
   promptrail export                 Export to promptrail-export.json
   promptrail export my-backup.json  Export to custom file
@@ -1019,10 +844,10 @@ switch (command) {
   case "rollback":
   case "rb":
     if (!flags.positional[0]) {
-      console.error(`${RED}Usage: promptrail rollback <prompt-number|text> [--hard]${RESET}`);
+      console.error(`${RED}Usage: promptrail rollback <prompt-number|text>${RESET}`);
       process.exit(1);
     }
-    cmdRollback(flags.positional[0], flags.hard);
+    cmdRollback(flags.positional[0]);
     break;
   case "sessions":
   case "s":

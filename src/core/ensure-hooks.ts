@@ -144,6 +144,7 @@ try {
 /**
  * Auto-provisions Cursor hooks in a workspace if not already present.
  * Creates .cursor/hooks/promptrail-hook.js and merges into .cursor/hooks.json.
+ * Also ensures hook files are in .git/info/exclude.
  * Returns true if any files were created or updated.
  */
 export function ensureCursorHooks(wsRoot: string): boolean {
@@ -191,9 +192,38 @@ export function ensureCursorHooks(wsRoot: string): boolean {
         changed = true;
       }
     }
+
+    ensureGitExcludeForHooks(wsRoot);
   } catch {
     // Non-fatal — hooks are optional enhancement
   }
 
   return changed;
+}
+
+function ensureGitExcludeForHooks(wsRoot: string): void {
+  try {
+    const excludePath = path.join(wsRoot, ".git", "info", "exclude");
+    if (!fs.existsSync(path.dirname(excludePath))) return;
+
+    const content = fs.existsSync(excludePath)
+      ? fs.readFileSync(excludePath, "utf-8")
+      : "";
+
+    let toAdd = "";
+
+    if (!content.includes(".promptrail")) {
+      toAdd += ".promptrail/\n";
+    }
+    if (!content.includes(".cursor/hooks/promptrail-hook.js")) {
+      toAdd += ".cursor/hooks/promptrail-hook.js\n";
+    }
+    if (!content.includes(".cursor/hooks.json")) {
+      toAdd += ".cursor/hooks.json\n";
+    }
+
+    if (!toAdd) return;
+
+    fs.writeFileSync(excludePath, content.trimEnd() + "\n" + toAdd, "utf-8");
+  } catch {}
 }

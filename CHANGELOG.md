@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-03-15
+
+### Removed
+- **FileWatcher attribution pipeline** — the entire time-window based file attribution system has been removed. File changes are no longer tracked via disk monitoring. File attribution now comes exclusively from Cursor hooks (`hook_edits`), SQLite `toolFormerData`, or source-specific data (Claude JSONL, VS Code replay). This eliminates phantom file attributions from `git pull`, `make build`, and other concurrent disk activity.
+- **`--hard` rollback mode** — Restore Files (hard reset) removed from CLI and extension. All rollback is now edit-based Cherry Revert using exact `old_string`/`new_string` reversal.
+- **`applyFileWhitelist` / `resolveToolEditedFiles`** — watcher whitelist functions removed; no longer needed without the watcher pipeline
+
+### Added
+- **API retry deduplication** — consecutive identical hook prompts (from API key failures, rate limits) are collapsed to the last retry via `deduplicateHookRetries()`
+- **Direct `filesChanged` from toolFormerData** — `parseCursorFromSQLite` and `parseCursorFromJSONL` now populate `filesChanged` directly from per-prompt tool data instead of relying on watcher time-windows
+
+### Fixed
+- **Hook-sourced tasks with 0 edits showed phantom files (BUG 21)** — with the watcher removed, empty `filesChanged` on hook-sourced tasks is authoritative
+- **API retries bloated timeline (BUG 22)** — consecutive identical prompts from API failures are now collapsed
+
 ## [0.6.5] - 2026-03-17
 
 ### Added
@@ -164,7 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/thisalihassan/promptrail/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/thisalihassan/promptrail/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/thisalihassan/promptrail/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/thisalihassan/promptrail/compare/v0.6.2...v0.6.3

@@ -14,7 +14,6 @@ export function activate(context: vscode.ExtensionContext): void {
   if (!workspaceFolder) return;
 
   const workspaceRoot = workspaceFolder.uri.fsPath;
-  ensureGitExclude(workspaceRoot);
   try { ensureCursorHooks(workspaceRoot); } catch {}
   tracker = new Tracker(workspaceRoot);
 
@@ -245,30 +244,6 @@ export function deactivate(): void {
   tracker?.dispose();
 }
 
-function ensureGitExclude(workspaceRoot: string): void {
-  try {
-    const excludePath = path.join(workspaceRoot, ".git", "info", "exclude");
-    if (!fs.existsSync(path.dirname(excludePath))) return;
-
-    const content = fs.existsSync(excludePath)
-      ? fs.readFileSync(excludePath, "utf-8")
-      : "";
-
-    let toAdd = "";
-
-    if (!content.includes(".promptrail")) {
-      toAdd += "\n.promptrail/\n";
-    }
-    else if (!content.includes(".cursor/hooks/promptrail-hook.js")) {
-      toAdd += "\n.cursor/hooks/promptrail-hook.js\n";
-      toAdd += "\n.cursor/hooks.json\n";
-    };
-
-    if(!toAdd) return;
-
-    fs.writeFileSync(excludePath, content.trimEnd() + toAdd, "utf-8");
-  } catch {}
-}
 
 function truncate(str: string, len: number): string {
   return str.length > len ? str.slice(0, len) + "..." : str;

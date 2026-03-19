@@ -12,7 +12,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { toEpochMs } from '../src/core/cursor-history';
 import { loadGitignorePatterns, shouldTrackFile, mergeChangesInWindow, type IgnorePatterns, type TimestampedChange } from '../src/core/file-watcher';
-import { applyFileWhitelist, deduplicateTimestamps, resolveToolEditedFiles, isClaudeInternalMessage } from '../src/core/session-reader';
+import { deduplicateTimestamps, deduplicateHookRetries, isClaudeInternalMessage } from '../src/core/session-reader';
 import { shouldResnapshot } from '../src/core/cursor-history';
 
 // ──────────────────────────────────────────────────────────────
@@ -682,14 +682,11 @@ describe("BUG 14: Auto-continue in JSONL but not SQLite", () => {
 			"direct attribution, no index shift");
 	});
 
-	it("session-level whitelist filters non-AI files from watcher", () => {
-		const sessionEditedFiles = new Set(["src/app.ts", "tests/app.test.ts"]);
-		const watcherFiles = ["src/app.ts", "package-lock.json", "tests/app.test.ts"];
-
-		const filtered = applyFileWhitelist(watcherFiles, undefined, sessionEditedFiles);
-
-		assert.deepStrictEqual(filtered, ["src/app.ts", "tests/app.test.ts"]);
-		assert.ok(!filtered.includes("package-lock.json"), "git pull file excluded");
+	it("toolFormerData provides per-prompt file attribution without watcher", () => {
+		const bubble = { text: "deploy", files: new Set(["deploy.sh", "config.yaml"]) };
+		const filesChanged = [...bubble.files];
+		assert.strictEqual(filesChanged.length, 2, "files come directly from toolFormerData");
+		assert.ok(filesChanged.includes("deploy.sh"));
 	});
 });
 
@@ -738,49 +735,22 @@ describe("BUG 15: SQLite-first eliminates index mismatch", () => {
 		assert.strictEqual(tasks.length, 2);
 	});
 
-	it("E2E: SQLite-first pipeline with watcher fallback", () => {
+	it("E2E: toolFormerData directly populates filesChanged (no watcher)", () => {
 		const sqliteBubbles = [
 			{ text: "fix the bug", createdAt: 1000, files: new Set(["session-reader.ts", "vscode-history.ts"]) },
 			{ text: "add tests", createdAt: 2000, files: new Set(["regressions.test.ts", "integration.test.ts"]) },
 			{ text: "update docs", createdAt: 3000, files: new Set<string>() },
 		];
 
-		const sessionFiles = new Set(["session-reader.ts", "vscode-history.ts", "regressions.test.ts", "integration.test.ts"]);
-
 		const tasks = sqliteBubbles.map((b, i) => ({
 			prompt: b.text,
 			createdAt: b.createdAt,
 			promptIndex: i,
-			toolEditedFiles: b.files.size > 0 ? b.files : undefined,
-			sessionEditedFiles: sessionFiles,
-			filesChanged: [] as string[],
+			filesChanged: [...b.files],
 		}));
 
-		const watcherChanges = [
-			{ relPath: "session-reader.ts", timestamp: 1500 },
-			{ relPath: "package-lock.json", timestamp: 1600 },
-			{ relPath: "integration.test.ts", timestamp: 2500 },
-		];
-
-		for (let i = 0; i < tasks.length; i++) {
-			const startTs = tasks[i].createdAt;
-			const endTs = i + 1 < tasks.length ? tasks[i + 1].createdAt : Infinity;
-			const inWindow = watcherChanges.filter(c => c.timestamp >= startTs && c.timestamp < endTs);
-
-			if (inWindow.length > 0) {
-				const relPaths = inWindow.map(c => c.relPath);
-				tasks[i].filesChanged = applyFileWhitelist(relPaths, tasks[i].toolEditedFiles, tasks[i].sessionEditedFiles);
-			}
-
-			if (tasks[i].filesChanged.length === 0 && tasks[i].toolEditedFiles && tasks[i].toolEditedFiles!.size > 0) {
-				tasks[i].filesChanged = [...tasks[i].toolEditedFiles!];
-			}
-		}
-
-		assert.deepStrictEqual(tasks[0].filesChanged, ["session-reader.ts"],
-			"watcher finds session-reader.ts, toolEditedFiles filters out package-lock.json");
-		assert.deepStrictEqual(tasks[1].filesChanged, ["integration.test.ts"],
-			"watcher finds integration.test.ts in window");
+		assert.deepStrictEqual(tasks[0].filesChanged, ["session-reader.ts", "vscode-history.ts"]);
+		assert.deepStrictEqual(tasks[1].filesChanged, ["regressions.test.ts", "integration.test.ts"]);
 		assert.deepStrictEqual(tasks[2].filesChanged, [],
 			"no files for informational prompt");
 	});
@@ -923,119 +893,122 @@ describe("BUG 11: getTasks shows files but getTaskChangeset returns empty", () =
 });
 
 // ----------------------------------------------------------
-// BUG 17: Rollback file writes leak into other prompts' file traces
+// BUG 17 & 18: SUPERSEDED by watcher removal.
 //
-// When a user cherry-reverts a prompt, the rollback writes files
-// via fs.writeFileSync. The FileWatcher picks up these writes as
-// new TimestampedChange entries with timestamp = Date.now(). These
-// entries fall into the last prompt's time window (extends to
-// Date.now()). The bug: the whitelist fallback in getTasks() treated
-// an empty toolEditedFiles Set (= SQLite confirms no edits) the same
-// as undefined (= no SQLite data). So it fell through to the
-// sessionEditedFiles whitelist, which includes ALL files edited
-// in the session — letting rollback-written files pass through.
+// These bugs were caused by the FileWatcher time-window attribution
+// pipeline: watcher changes were filtered through applyFileWhitelist
+// with toolEditedFiles/sessionEditedFiles. Empty vs undefined
+// toolEditedFiles caused phantom file attributions.
 //
-// Fix: when toolEditedFiles is defined (even empty), use it as
-// the whitelist. Only fall back to sessionEditedFiles when
-// toolEditedFiles is undefined.
+// Fix: The entire watcher-based attribution pipeline was removed.
+// File attribution now comes directly from hooks (hook_edits per
+// generationId) or SQLite toolFormerData. No watcher fallback means
+// git pull, builds, and other concurrent disk activity can never be
+// misattributed to an AI prompt.
 // ----------------------------------------------------------
-describe("BUG 17: Rollback file writes leak into other prompts' file traces", () => {
-	it("empty toolEditedFiles blocks all watcher files (no fallback to session)", () => {
-		const files = ["README.md", "COMMERCIAL.md"];
-		const result = applyFileWhitelist(files, new Set<string>(), new Set(["README.md", "COMMERCIAL.md", "src/app.ts"]));
-		assert.strictEqual(result.length, 0,
-			"Empty toolEditedFiles = prompt edited no files, nothing should pass");
+
+// ----------------------------------------------------------
+// BUG 21: Hook-sourced tasks with 0 edits must not fall through
+//         to watcher (now removed) or show phantom files.
+//
+// parseCursorFromHooks sets hookSourced=true on all tasks.
+// With the watcher removed, filesChanged comes directly from
+// hook_edits — an empty array is authoritative.
+// ----------------------------------------------------------
+describe("BUG 21: Hook-sourced tasks with 0 edits", () => {
+	it("hookSourced task with empty filesChanged stays empty (no phantom files)", () => {
+		const task = {
+			id: "cur-abc-0",
+			prompt: "already done",
+			createdAt: Date.now(),
+			status: "completed" as const,
+			filesChanged: [],
+			source: "cursor",
+			hookSourced: true,
+			edits: undefined,
+			writes: undefined,
+		};
+		assert.strictEqual(task.filesChanged.length, 0,
+			"hook-sourced task with no edits must have empty filesChanged");
+		assert.strictEqual(task.hookSourced, true);
 	});
 
-	it("undefined toolEditedFiles falls back to session whitelist", () => {
-		const files = ["README.md", "src/app.ts", "random.txt"];
-		const result = applyFileWhitelist(files, undefined, new Set(["README.md", "src/app.ts"]));
-		assert.strictEqual(result.length, 2);
-		assert.ok(result.includes("README.md"));
-		assert.ok(result.includes("src/app.ts"));
-		assert.ok(!result.includes("random.txt"));
-	});
-
-	it("populated toolEditedFiles filters to per-prompt files only", () => {
-		const files = ["README.md", "COMMERCIAL.md", "src/app.ts"];
-		const result = applyFileWhitelist(files, new Set(["README.md"]), new Set(["README.md", "COMMERCIAL.md", "src/app.ts"]));
-		assert.deepStrictEqual(result, ["README.md"]);
-	});
-
-	it("no whitelist at all passes everything through", () => {
-		const files = ["a.ts", "b.ts"];
-		const result = applyFileWhitelist(files, undefined, undefined);
-		assert.deepStrictEqual(result, ["a.ts", "b.ts"]);
-	});
-
-	it("empty session whitelist with undefined toolEditedFiles passes everything", () => {
-		const files = ["a.ts", "b.ts"];
-		const result = applyFileWhitelist(files, undefined, new Set<string>());
-		assert.deepStrictEqual(result, ["a.ts", "b.ts"]);
+	it("hookSourced task with edits populates filesChanged from hook_edits", () => {
+		const task = {
+			id: "cur-abc-1",
+			prompt: "fix the bug",
+			createdAt: Date.now(),
+			status: "completed" as const,
+			filesChanged: ["src/app.ts"],
+			source: "cursor",
+			hookSourced: true,
+			edits: [{ file: "src/app.ts", oldString: "old", newString: "new" }],
+		};
+		assert.strictEqual(task.filesChanged.length, 1);
+		assert.strictEqual(task.filesChanged[0], "src/app.ts");
 	});
 });
 
 // ----------------------------------------------------------
-// BUG 18: No-edit prompt shows file changes (toolEditedFiles
-//         empty→undefined conversion)
+// BUG 22: Consecutive identical hook prompts from API retries
+//         bloat the timeline.
 //
-// parseCursorFromSQLite converted empty toolEditedFiles Sets
-// to undefined via `b.files.size > 0 ? b.files : undefined`.
-// This made "prompt edited no files" (empty Set) look like
-// "no SQLite data available" (undefined), causing the session-
-// level whitelist to pass watcher changes through — including
-// Cursor's internal file restorations and user edits.
+// When Cursor retries a prompt (API key failure, rate limit),
+// each retry fires a new beforeSubmitPrompt hook with a unique
+// generationId. parseCursorFromHooks showed all retries as
+// separate prompts in the timeline.
 //
-// Fix: resolveToolEditedFiles() keeps the empty Set when the
-// session has per-prompt file data (hasPerPromptData), since
-// empty then authoritatively means "no edits".
+// Fix: deduplicateHookRetries() collapses consecutive runs of
+// identical prompt text into the last entry (the final attempt).
 // ----------------------------------------------------------
-describe("BUG 18: No-edit prompt shows file changes (empty→undefined)", () => {
-	it("session with perPromptData: empty files → empty Set (not undefined)", () => {
-		const result = resolveToolEditedFiles(new Set(), true);
-		assert.ok(result !== undefined, "must not be undefined");
-		assert.strictEqual(result!.size, 0, "empty Set means 'no edits'");
+describe("BUG 22: API retry deduplication", () => {
+	it("collapses 3 consecutive identical prompts to 1", () => {
+		const prompts = [
+			{ promptText: "fix the bug", generationId: "gen1", model: null, timestamp: 1000 },
+			{ promptText: "fix the bug", generationId: "gen2", model: null, timestamp: 2000 },
+			{ promptText: "fix the bug", generationId: "gen3", model: null, timestamp: 3000 },
+		];
+		const result = deduplicateHookRetries(prompts);
+		assert.strictEqual(result.length, 1);
+		assert.strictEqual(result[0].generationId, "gen3", "keeps the last retry");
 	});
 
-	it("session with perPromptData: populated files → the Set", () => {
-		const files = new Set(["src/auth.ts"]);
-		const result = resolveToolEditedFiles(files, true);
-		assert.ok(result !== undefined);
-		assert.ok(result!.has("src/auth.ts"));
+	it("preserves distinct prompts between retries", () => {
+		const prompts = [
+			{ promptText: "fix auth", generationId: "gen1", model: null, timestamp: 1000 },
+			{ promptText: "fix auth", generationId: "gen2", model: null, timestamp: 2000 },
+			{ promptText: "now add tests", generationId: "gen3", model: null, timestamp: 3000 },
+			{ promptText: "now add tests", generationId: "gen4", model: null, timestamp: 4000 },
+		];
+		const result = deduplicateHookRetries(prompts);
+		assert.strictEqual(result.length, 2);
+		assert.strictEqual(result[0].promptText, "fix auth");
+		assert.strictEqual(result[0].generationId, "gen2");
+		assert.strictEqual(result[1].promptText, "now add tests");
+		assert.strictEqual(result[1].generationId, "gen4");
 	});
 
-	it("session without perPromptData: empty files → undefined (unknown)", () => {
-		const result = resolveToolEditedFiles(new Set(), false);
-		assert.strictEqual(result, undefined, "no perPromptData = fall back to session whitelist");
+	it("single prompt passthrough", () => {
+		const prompts = [
+			{ promptText: "hello", generationId: "gen1", model: null, timestamp: 1000 },
+		];
+		const result = deduplicateHookRetries(prompts);
+		assert.strictEqual(result.length, 1);
 	});
 
-	it("session without perPromptData: populated files → the Set", () => {
-		const files = new Set(["src/app.ts"]);
-		const result = resolveToolEditedFiles(files, false);
-		assert.ok(result !== undefined);
-		assert.ok(result!.has("src/app.ts"));
+	it("empty array passthrough", () => {
+		const result = deduplicateHookRetries([]);
+		assert.strictEqual(result.length, 0);
 	});
 
-	it("full flow: no-edit prompt in session with edits blocks watcher changes", () => {
-		const watcherFiles = ["src/auth.ts"];
-		const session = new Set(["src/auth.ts"]);
-
-		const toolEdited = resolveToolEditedFiles(new Set(), true);
-		const result = applyFileWhitelist(watcherFiles, toolEdited, session);
-		assert.strictEqual(result.length, 0,
-			"watcher detected src/auth.ts (Cursor file restore) but toolEditedFiles blocks it");
-	});
-
-	it("BROKEN without fix: undefined lets session whitelist pass watcher changes", () => {
-		const watcherFiles = ["src/auth.ts"];
-		const session = new Set(["src/auth.ts"]);
-
-		const toolEdited = resolveToolEditedFiles(new Set(), false);
-		assert.strictEqual(toolEdited, undefined, "without perPromptData, empty→undefined");
-
-		const result = applyFileWhitelist(watcherFiles, toolEdited, session);
-		assert.strictEqual(result.length, 1,
-			"undefined falls through to session whitelist (the bug behavior)");
+	it("non-consecutive duplicates are NOT collapsed", () => {
+		const prompts = [
+			{ promptText: "fix auth", generationId: "gen1", model: null, timestamp: 1000 },
+			{ promptText: "add tests", generationId: "gen2", model: null, timestamp: 2000 },
+			{ promptText: "fix auth", generationId: "gen3", model: null, timestamp: 3000 },
+		];
+		const result = deduplicateHookRetries(prompts);
+		assert.strictEqual(result.length, 3, "non-consecutive duplicates kept separately");
 	});
 });
 
@@ -1071,19 +1044,6 @@ describe("BUG 19: Shadow DB re-snapshot misses assistant bubbles", () => {
 	it("no re-snapshot when all data is current", () => {
 		assert.ok(!shouldResnapshot(4, 4, 20, 20),
 			"all counts match → no re-snapshot needed");
-	});
-
-	it("BROKEN with old condition: assistant data exists but incomplete", () => {
-		const cachedUser = 4, currentUser = 4;
-		const cachedAssistant = 11, readableAssistant = 22;
-
-		const oldCondition = cachedUser < currentUser || cachedAssistant === 0;
-		assert.ok(!oldCondition,
-			"old condition: 4 < 4 = false, 11 === 0 = false → NO re-snapshot (BUG)");
-
-		const newCondition = shouldResnapshot(cachedUser, currentUser, cachedAssistant, readableAssistant);
-		assert.ok(newCondition,
-			"new condition: 11 < 22 → re-snapshot captures missing responses");
 	});
 
 	it("initial snapshot: zero cached triggers re-snapshot", () => {

@@ -21,4 +21,5 @@ ROADMAP.md
 .env
 .env.example
 conversation-*.md
+.claude-plugin/
 *.vsix
