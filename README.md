@@ -36,7 +36,7 @@ Promptrail reads your AI sessions automatically — no manual tagging, no config
 
 | Agent | Diff Quality |
 |-------|--------------|
-| **Cursor** | Full before/after snapshots |
+| **Cursor** | Edit-level hunks via hooks (auto-installed) |
 | **Claude Code** | Edit-level hunks |
 
 ### What You Can Do
@@ -46,7 +46,6 @@ Promptrail reads your AI sessions automatically — no manual tagging, no config
 - **Diff**: View before/after diffs for any prompt's changes
 - **View Response**: Read the AI's full response for any prompt (text replies + tool calls)
 - **Cherry Revert**: Undo a specific prompt's changes without losing unrelated work
-- **Restore Files**: Hard reset files to their exact state before a prompt (overwrites later edits)
 - **Export**: Export any conversation to markdown
 - **Search**: Full-text search across prompts and AI responses (FTS5), or filter by file name
 - **Filter**: Toggle to show only prompts that changed files
@@ -58,7 +57,7 @@ Promptrail reads your AI sessions automatically — no manual tagging, no config
 | `Promptrail: Refresh Timeline` | Refresh the sidebar timeline |
 | `Promptrail: View Task Diff` | Open before/after diffs for a prompt's changes |
 | `Promptrail: View AI Response` | View the AI's response for a prompt (text + tool calls) |
-| `Promptrail: Rollback to Task` | Cherry Revert or Restore Files — choose rollback mode |
+| `Promptrail: Rollback to Task` | Cherry revert a prompt's changes using exact edit reversal |
 | `Promptrail: Export Chat to Markdown` | Export a conversation as `.md` |
 
 ## Installation
@@ -141,7 +140,6 @@ promptrail response 3            # Show AI response for prompt #3
 promptrail search "shadow DB"    # Search prompts and responses (FTS5)
 promptrail search "auth.ts"      # Search by file name
 promptrail rollback 5            # Cherry revert prompt #5 (preserves later edits)
-promptrail rollback 5 --hard     # Restore files to state before prompt #5
 promptrail --version             # Print version
 promptrail sessions              # List all sessions
 promptrail migrate ../old-project  # Copy sessions from another workspace
@@ -173,14 +171,12 @@ promptrail migrate /path/to/backend
 - **Cursor chats** — transcripts and sidebar entries, so imported chats show up in Cursor's chat panel
 - **Cursor metadata** — timestamps, file attribution, checkpoints, code blocks
 - **Claude Code sessions** — session files including subagent and tool-result data
-- **File snapshots** — change history merged with deduplication
 
 All embedded workspace paths are automatically rewritten from source to target. The source workspace is never modified — everything is copied, not moved.
 
 ## Known Limitations
 
-- **Rollback requires the extension to have been running** during the AI's edits. The file watcher captures before/after snapshots in real time — if the extension wasn't active, there's no snapshot data for rollback.
-- **Restore Files not yet supported for Claude Code sessions.** Cherry Revert works for Claude (uses exact `old_string`/`new_string` from tool calls). Restore Files is planned.
+- **Cursor rollback requires hooks** — hooks are auto-installed on first use (`promptrail init`). Sessions that ran before hooks were installed have no edit data for rollback.
 - **Cherry Revert may conflict** if a later prompt modified the same lines or strings. Conflicts are reported per-file so you know what couldn't be reverted.
 
 ## Platform Support

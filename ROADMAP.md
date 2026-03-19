@@ -6,10 +6,7 @@
 - **Cursor extension** — published on [Open VSX](https://open-vsx.org/extension/thisalihassan/promptrail) and [npm](https://www.npmjs.com/package/promptrail)
 - **Session migration** — migrate sessions between workspaces via `promptrail migrate`
 - **Claude Code plugin** — native integration via Claude Code hooks
-- **Cherry Revert** — undo a single prompt's changes without affecting other prompts (LCS diff + reverse-patch for Cursor, exact string reversal for Claude)
-- **Restore Files** — hard reset files to their pre-prompt state for Cursor sessions
-- **Dual rollback modes** — user chooses Cherry Revert or Restore Files in extension UI and CLI (`--hard`)
-- **Per-prompt file attribution** — uses Cursor SQLite `toolFormerData` to filter out `git pull` and manual edits from the file watcher
+- **Cherry Revert** — undo a single prompt's changes without affecting other prompts (exact string reversal for Cursor hooks + Claude, LCS diff for legacy)
 - **SQLite-first Cursor parsing** — uses SQLite user bubbles as canonical prompt list, eliminating JSONL noise (duplicates, auto-continues)
 - **Shadow DB** — `.promptrail/promptrail.db` caches Cursor bubble data before it gets pruned or collapsed
 - **Assistant response capture** — shadow DB preserves AI responses (text + tool calls) per prompt before Cursor prunes bubble data
@@ -24,11 +21,13 @@
 - **Landing page** — GitHub Pages site at `docs/`
 - **Cursor hooks** — auto-provisioned `.cursor/hooks/` captures `afterFileEdit`, `beforeSubmitPrompt`, `afterAgentResponse`, `stop` for Claude-quality per-prompt tracking in Cursor
 - **`promptrail init`** — CLI command to explicitly install Cursor hooks
-- **SQLite file changes** — `file_changes` table replaces `changes.json` with automatic migration and 30-day pruning
-- **E2E test suite** — full-pipeline tests (Claude, Cursor watcher, rollback noise)
+- **FileWatcher removed** — entire time-window attribution pipeline removed; file attribution now comes exclusively from hooks, SQLite toolFormerData, or source-specific data (no more phantom files from `git pull` or builds)
+- **API retry deduplication** — consecutive identical hook prompts (from API key failures) collapsed to the last retry
+- **E2E test suite** — full-pipeline tests (Claude, Cursor JSONL-only)
 
 ## Planned
 
 - **Linux/Windows testing** — verify all platform paths
-- **Claude Code: Restore Files** — hard reset for Claude sessions (data path exists via file watcher, implementation deferred)
+- **File deletion tracking** — `postToolUse` hook with `"Delete"` matcher for per-prompt delete attribution
+- **Subagent file attribution** — `subagentStop` hook provides `modified_files` per subagent
 - **Windsurf/Copilot support** — read sessions from other AI coding agents
