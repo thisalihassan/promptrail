@@ -242,3 +242,97 @@ describe("E2E: Cursor JSONL-only pipeline (no hooks)", () => {
     }
   });
 });
+
+// ──────────────────────────────────────────────────────────────
+// BUG 23: getTaskResponse returns undefined for hook-sourced Cursor tasks.
+//
+// Root cause: getTaskResponse parsed the taskId to extract a short
+// composerId prefix (e.g. "3aa7e65b"), then called
+// findComposerIdByPrefix() which queries the sessions table.
+// Hook-only conversations never create a row in sessions, so
+// findComposerIdByPrefix returned undefined and the method bailed
+// out immediately — before ever attempting the hook_responses lookup.
+//
+// The task already carries sessionId (full conversationId) and
+// generationId from parseCursorFromHooks. The fix resolves the hook
+// response using those fields first, only falling through to the
+// sessions/bubbles path for legacy SQLite-snapshotted sessions.
+// ──────────────────────────────────────────────────────────────
+describe("BUG 23: getTaskResponse for hook-sourced Cursor tasks", () => {
+  let wsRoot: string;
+  let tracker: Tracker;
+
+  before(() => {
+    wsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "promptrail-e2e-bug23-"));
+
+    const dbPath = path.join(wsRoot, ".promptrail", "promptrail.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const { DatabaseSync } = require("node:sqlite");
+    const rawDb = new DatabaseSync(dbPath);
+    rawDb.exec("PRAGMA journal_mode=WAL");
+    rawDb.exec(`
+      CREATE TABLE IF NOT EXISTS hook_prompts (
+        conversationId TEXT NOT NULL, generationId TEXT NOT NULL,
+        promptText TEXT NOT NULL, model TEXT, timestamp REAL NOT NULL,
+        PRIMARY KEY (conversationId, generationId)
+      );
+      CREATE TABLE IF NOT EXISTS hook_edits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL,
+        generationId TEXT NOT NULL, filePath TEXT NOT NULL,
+        oldString TEXT, newString TEXT, timestamp REAL NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS hook_responses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, conversationId TEXT NOT NULL,
+        generationId TEXT NOT NULL, responseText TEXT NOT NULL,
+        model TEXT, timestamp REAL NOT NULL
+      );
+    `);
+
+    rawDb.prepare(`INSERT INTO hook_prompts VALUES (?, ?, ?, ?, ?)`)
+      .run("abcdef12-0000-0000-0000-000000000001", "gen-aaa", "fix the login bug", "claude-3-5", 1000);
+    rawDb.prepare(`INSERT INTO hook_edits (conversationId, generationId, filePath, oldString, newString, timestamp) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run("abcdef12-0000-0000-0000-000000000001", "gen-aaa", "src/login.ts", "return false;", "return checkCredentials(u, p);", 1100);
+    rawDb.prepare(`INSERT INTO hook_responses (conversationId, generationId, responseText, model, timestamp) VALUES (?, ?, ?, ?, ?)`)
+      .run("abcdef12-0000-0000-0000-000000000001", "gen-aaa", "I updated login.ts to call checkCredentials.", "claude-3-5", 1200);
+    rawDb.close();
+
+    tracker = new Tracker(wsRoot);
+  });
+
+  after(() => {
+    tracker.dispose();
+    fs.rmSync(wsRoot, { recursive: true, force: true });
+  });
+
+  it("getTasks() finds the hook-sourced task", () => {
+    const tasks = tracker.getTasks();
+    const hook = tasks.filter((t) => t.source === "cursor");
+    assert.strictEqual(hook.length, 1, "Should have 1 hook-sourced Cursor task");
+    assert.ok(hook[0].prompt.includes("fix the login bug"));
+  });
+
+  it("getTaskResponse() returns the response text for a hook-sourced task", () => {
+    const tasks = tracker.getTasks();
+    const hookTask = tasks.find((t) => t.source === "cursor");
+    assert.ok(hookTask, "hook task must exist");
+
+    const resp = tracker.getTaskResponse(hookTask.id);
+    assert.ok(resp, `getTaskResponse returned undefined for hook task ${hookTask.id}`);
+    assert.ok(
+      resp!.includes("checkCredentials"),
+      `Response should contain the hook response text, got: ${resp}`
+    );
+    assert.ok(resp!.includes("fix the login bug"), "Response should echo the prompt");
+  });
+
+  it("getTaskResponse() returns undefined for a task with no response", () => {
+    const tasks = tracker.getTasks();
+    const hookTask = tasks.find((t) => t.source === "cursor");
+    assert.ok(hookTask);
+
+    // Invent a non-existent task ID derived from the same session
+    const fakeId = hookTask.id.replace(/-\d+$/, "-99");
+    const resp = tracker.getTaskResponse(fakeId);
+    assert.strictEqual(resp, undefined, "Should return undefined for unknown task");
+  });
+});

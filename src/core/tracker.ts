@@ -181,32 +181,20 @@ export class Tracker {
     if (task.source === "cursor") {
       const parts = taskId.split("-");
       const userIndex = parseInt(parts[parts.length - 1], 10);
-      const shortId = parts.slice(1, -1).join("-");
-
-      const db = this.sessionReader.getPromptRailDB();
-      const fullComposerId = db.findComposerIdByPrefix(shortId);
-      if (!fullComposerId) return undefined;
-
       const te = task as TaskWithEdits;
-      if (te.generationId) {
-        const hookResp = this.sessionReader.getHookResponse(
-          fullComposerId,
-          te.generationId
-        );
-        if (hookResp) {
-          let md = `# Response\n\n`;
-          md += `> **Prompt:** ${task.prompt}\n\n---\n\n`;
-          md += hookResp;
-          return md;
-        }
-      } else {
-        const genId = this.sessionReader.getHookGenerationId(
-          fullComposerId,
-          userIndex
-        );
+
+      // Hook-sourced tasks always have sessionId = full conversationId.
+      // We must resolve hook responses BEFORE touching findComposerIdByPrefix
+      // because hook-only conversations have no row in the sessions table.
+      const hookConversationId = te.sessionId;
+      if (hookConversationId) {
+        const conversationIdForHook = hookConversationId;
+        const genId =
+          te.generationId ||
+          this.sessionReader.getHookGenerationId(conversationIdForHook, userIndex);
         if (genId) {
           const hookResp = this.sessionReader.getHookResponse(
-            fullComposerId,
+            conversationIdForHook,
             genId
           );
           if (hookResp) {
@@ -217,6 +205,13 @@ export class Tracker {
           }
         }
       }
+
+      // Fallback: read assistant bubbles from the promptrail sessions table
+      // (populated when Cursor's own SQLite is snapshotted).
+      const shortId = parts.slice(1, -1).join("-");
+      const db = this.sessionReader.getPromptRailDB();
+      const fullComposerId = db.findComposerIdByPrefix(shortId);
+      if (!fullComposerId) return undefined;
 
       const bubbles = db.getAssistantBubbles(fullComposerId);
       const forPrompt = bubbles.filter(
