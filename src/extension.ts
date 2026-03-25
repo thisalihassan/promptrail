@@ -6,6 +6,7 @@ import { Tracker } from "./core/tracker";
 import { TimelineProvider } from "./views/timeline-provider";
 import { ConversationExporter } from "./core/exporter";
 import { ensureCursorHooks } from "./core/ensure-hooks";
+import { ensureSkillAndRule } from "./core/ensure-skill-rule";
 
 let tracker: Tracker | undefined;
 
@@ -15,6 +16,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const workspaceRoot = workspaceFolder.uri.fsPath;
   try { ensureCursorHooks(workspaceRoot); } catch {}
+  try { ensureSkillAndRule(workspaceRoot); } catch {}
   tracker = new Tracker(workspaceRoot);
 
   const timelineProvider = new TimelineProvider(

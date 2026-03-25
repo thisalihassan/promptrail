@@ -13,6 +13,7 @@ import {
   revertStringEdits,
 } from "../core/selective-revert";
 import { ensureCursorHooks } from "../core/ensure-hooks";
+import { ensureSkillAndRule } from "../core/ensure-skill-rule";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -735,8 +736,8 @@ function cmdImport(flags: Flags): void {
 
 function cmdInit(): void {
   const wsRoot = getWorkspaceRoot();
-  const created = ensureCursorHooks(wsRoot);
-  if (created) {
+  const hooksCreated = ensureCursorHooks(wsRoot);
+  if (hooksCreated) {
     console.log(`${GREEN}Cursor hooks installed:${RESET}`);
     console.log(`  ${DIM}.cursor/hooks/promptrail-hook.js${RESET}`);
     console.log(`  ${DIM}.cursor/hooks.json${RESET}`);
@@ -744,6 +745,19 @@ function cmdInit(): void {
     console.log(`${DIM}Edit data will be captured per-prompt for rollback + diff.${RESET}`);
   } else {
     console.log(`${DIM}Cursor hooks already configured.${RESET}`);
+  }
+
+  const sr = ensureSkillAndRule(wsRoot);
+  if (sr.globalSkillCreated) {
+    console.log(`\n${GREEN}Global agent skill installed:${RESET}`);
+    console.log(`  ${DIM}~/.cursor/skills/promptrail/SKILL.md${RESET}`);
+  }
+  if (sr.projectRuleCreated) {
+    console.log(`${GREEN}Project rule installed:${RESET}`);
+    console.log(`  ${DIM}.cursor/rules/use-promptrail.mdc${RESET}`);
+  }
+  if (!sr.globalSkillCreated && !sr.projectRuleCreated) {
+    console.log(`${DIM}Agent skill and rule already configured.${RESET}`);
   }
 }
 
@@ -799,9 +813,10 @@ const rawArgs = process.argv.slice(2);
 const command = rawArgs[0];
 const flags = parseFlags(rawArgs.slice(1));
 
-// Auto-provision Cursor hooks on first use (silent, non-blocking)
+// Auto-provision Cursor hooks, global skill, and project rule on first use (silent, non-blocking)
 if (command && command !== "init" && command !== "--help" && command !== "-h" && command !== "--version" && command !== "-v") {
   try { ensureCursorHooks(getWorkspaceRoot()); } catch {}
+  try { ensureSkillAndRule(getWorkspaceRoot()); } catch {}
 }
 
 switch (command) {
