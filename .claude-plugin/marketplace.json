@@ -10,7 +10,7 @@
       "name": "promptrail",
       "source": "./claude-plugin",
       "description": "Prompt-level version control for Claude Code. Browse, search, diff, and rollback AI changes by intent.",
-      "version": "0.6.6",
+      "version": "0.6.8",
       "author": {
         "name": "thisalihassan"
       }
