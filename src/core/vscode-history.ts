@@ -316,7 +316,7 @@ export class VSCodeHistory {
       requests.push({
         requestId,
         timestamp,
-        messageText: messageText.slice(0, 500),
+        messageText: messageText.slice(0, 2000),
         toolInvocations,
         filesEdited: [...filesFromResponse],
       });

@@ -98,6 +98,10 @@ function cmdTimeline(flags: Flags): void {
     return;
   }
 
+  // Global chronological list — used for stable #N indices that work
+  // across diff/rollback/search regardless of active filters.
+  const globalChronological = [...tasks].sort((a, b) => a.createdAt - b.createdAt);
+
   const chronological = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
   const allSorted = [...chronological].reverse();
   const limited = flags.last ? allSorted.slice(0, flags.last) : allSorted;
@@ -106,7 +110,7 @@ function cmdTimeline(flags: Flags): void {
   console.log();
   for (let i = 0; i < sorted.length; i++) {
     const t = sorted[i];
-    const chronIdx = chronological.indexOf(t);
+    const chronIdx = globalChronological.indexOf(t);
     const src = t.source || "unknown";
     const srcLabel = src === "cursor" ? `${BLUE}cursor${RESET}` : src === "claude" ? `${MAGENTA}claude${RESET}` : src === "vscode" ? `${GREEN}vscode${RESET}` : `${DIM}${src}${RESET}`;
 
@@ -141,8 +145,7 @@ function cmdDiff(selector: string, flags: Flags = { positional: [] }): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
   const tasks = reader.readAllTasks();
-  const filtered = filterTasks(tasks, flags);
-  const sorted = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
+  const sorted = [...tasks].sort((a, b) => a.createdAt - b.createdAt);
 
   const task = resolveTask(sorted, selector);
   if (!task) {
@@ -347,8 +350,7 @@ function cmdResponse(selector: string, flags: Flags = { positional: [] }): void 
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
   const tasks = reader.readAllTasks();
-  const filtered = filterTasks(tasks, flags);
-  const sorted = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
+  const sorted = [...tasks].sort((a, b) => a.createdAt - b.createdAt);
 
   const task = resolveTask(sorted, selector);
   if (!task) {
@@ -361,8 +363,29 @@ function cmdResponse(selector: string, flags: Flags = { positional: [] }): void 
   if (task.source === "cursor") {
     const parts = task.id.split("-");
     const userIndex = parseInt(parts[parts.length - 1], 10);
-    const shortId = parts.slice(1, -1).join("-");
+    const te = task as TaskWithEdits;
 
+    // Try hook responses first — hook-only sessions have no row in the
+    // sessions table, so we must resolve via sessionId before
+    // findComposerIdByPrefix (same fix as BUG 23 in tracker.ts).
+    const hookConversationId = te.sessionId;
+    if (hookConversationId) {
+      const genId =
+        te.generationId ||
+        reader.getHookGenerationId(hookConversationId, userIndex);
+      if (genId) {
+        const hookResp = reader.getHookResponse(hookConversationId, genId);
+        if (hookResp) {
+          console.log(`${BOLD}Response for #${idx}:${RESET} ${truncate(task.prompt, 70)}`);
+          console.log(`${DIM}${timeAgo(task.createdAt)} | ${task.source}${RESET}\n`);
+          console.log(hookResp);
+          return;
+        }
+      }
+    }
+
+    // Fall back to shadow DB assistant bubbles
+    const shortId = parts.slice(1, -1).join("-");
     const db = reader.getPromptRailDB();
     const fullComposerId = db.findComposerIdByPrefix(shortId);
     if (!fullComposerId) {
@@ -370,26 +393,6 @@ function cmdResponse(selector: string, flags: Flags = { positional: [] }): void 
       return;
     }
 
-    // Try hook responses first (from Cursor hooks)
-    const te = task as TaskWithEdits;
-    let hookResp: string | undefined;
-    if (te.generationId) {
-      hookResp = reader.getHookResponse(fullComposerId, te.generationId);
-    } else {
-      const genId = reader.getHookGenerationId(fullComposerId, userIndex);
-      if (genId) {
-        hookResp = reader.getHookResponse(fullComposerId, genId);
-      }
-    }
-
-    if (hookResp) {
-      console.log(`${BOLD}Response for #${idx}:${RESET} ${truncate(task.prompt, 70)}`);
-      console.log(`${DIM}${timeAgo(task.createdAt)} | ${task.source}${RESET}\n`);
-      console.log(hookResp);
-      return;
-    }
-
-    // Fall back to shadow DB assistant bubbles
     const bubbles = db.getAssistantBubbles(fullComposerId);
     const forPrompt = bubbles.filter((b: any) => b.userIndex === userIndex);
 
@@ -464,6 +467,20 @@ function cmdSessions(flags: Flags): void {
   }
 }
 
+function makeSnippet(text: string, lowerQuery: string, queryLen: number): string {
+  const matchIdx = text.toLowerCase().indexOf(lowerQuery);
+  if (matchIdx === -1) return "";
+  const start = Math.max(0, matchIdx - 30);
+  const end = Math.min(text.length, matchIdx + queryLen + 30);
+  return (
+    (start > 0 ? "..." : "") +
+    text.slice(start, matchIdx) +
+    ">>>" + text.slice(matchIdx, matchIdx + queryLen) + "<<<" +
+    text.slice(matchIdx + queryLen, end) +
+    (end < text.length ? "..." : "")
+  );
+}
+
 function cmdSearch(query: string, flags: Flags): void {
   const wsRoot = getWorkspaceRoot();
   const reader = new SessionReader(wsRoot);
@@ -501,7 +518,8 @@ function cmdSearch(query: string, flags: Flags): void {
       const existing = hits.find((h) => h.promptText === r.promptText && h.createdAt === r.createdAt);
       if (existing) {
         if (r.type === "prompt") existing.promptSnippet = r.snippet;
-        else existing.responseSnippet = r.snippet;
+        else if (r.type === "response") existing.responseSnippet = r.snippet;
+        else if (r.type === "file") existing.fileSnippet = r.snippet;
         continue;
       }
       if (seen.has(key)) continue;
@@ -518,11 +536,12 @@ function cmdSearch(query: string, flags: Flags): void {
         filesCount: task?.filesChanged.length || 0,
         promptSnippet: r.type === "prompt" ? r.snippet : undefined,
         responseSnippet: r.type === "response" ? r.snippet : undefined,
+        fileSnippet: r.type === "file" ? r.snippet : undefined,
       });
     }
   }
 
-  // Direct text + file search for all tasks
+  // Direct text + file + response search for all tasks
   const lower = query.toLowerCase();
   const hitIds = new Set(hits.map((h) => `${h.createdAt}:${h.source}`));
 
@@ -534,29 +553,37 @@ function cmdSearch(query: string, flags: Flags): void {
     const matchedFiles = t.filesChanged.filter((f) => f.toLowerCase().includes(lower));
     const fileMatch = matchedFiles.length > 0;
 
-    if (!promptMatch && !fileMatch) continue;
-    if (alreadyHit && !fileMatch) continue;
+    // Lazy response fetch: only check responses when prompt+file didn't match
+    let responseText: string | undefined;
+    let responseMatch = false;
+    if (!promptMatch && !fileMatch) {
+      responseText = reader.getResponseText(t as any);
+      responseMatch = responseText ? responseText.toLowerCase().includes(lower) : false;
+    }
 
-    // If already in hits from FTS but also matched files, add file snippet
-    if (alreadyHit && fileMatch) {
+    if (!promptMatch && !fileMatch && !responseMatch) continue;
+    if (alreadyHit && !fileMatch && !responseMatch) continue;
+
+    // If already in hits from FTS but also matched files or response, augment
+    if (alreadyHit) {
       const existing = hits.find((h) => h.chronIdx === chronIdx);
       if (existing) {
-        existing.fileSnippet = matchedFiles.join(", ");
+        if (fileMatch) existing.fileSnippet = matchedFiles.join(", ");
+        if (responseMatch && responseText && !existing.responseSnippet) {
+          existing.responseSnippet = makeSnippet(responseText, lower, query.length);
+        }
       }
       continue;
     }
 
     let promptSnippet: string | undefined;
     if (promptMatch) {
-      const matchIdx = t.prompt.toLowerCase().indexOf(lower);
-      const start = Math.max(0, matchIdx - 30);
-      const end = Math.min(t.prompt.length, matchIdx + query.length + 30);
-      promptSnippet =
-        (start > 0 ? "..." : "") +
-        t.prompt.slice(start, matchIdx) +
-        ">>>" + t.prompt.slice(matchIdx, matchIdx + query.length) + "<<<" +
-        t.prompt.slice(matchIdx + query.length, end) +
-        (end < t.prompt.length ? "..." : "");
+      promptSnippet = makeSnippet(t.prompt, lower, query.length);
+    }
+
+    let responseSnippet: string | undefined;
+    if (responseMatch && responseText) {
+      responseSnippet = makeSnippet(responseText, lower, query.length);
     }
 
     hits.push({
@@ -567,6 +594,7 @@ function cmdSearch(query: string, flags: Flags): void {
       createdAt: t.createdAt,
       filesCount: t.filesChanged.length,
       promptSnippet,
+      responseSnippet,
       fileSnippet: fileMatch ? matchedFiles.join(", ") : undefined,
     });
   }

@@ -235,6 +235,50 @@ export class SessionReader {
     return undefined;
   }
 
+  /**
+   * Returns raw response text for any task source. Used by search to match
+   * against AI responses without the markdown formatting of getTaskResponse.
+   */
+  getResponseText(task: TaskWithEdits): string | undefined {
+    if (task.source === "cursor") {
+      // Hook-sourced: look up via generationId
+      if (task.sessionId && (task.generationId || task.hookSourced)) {
+        const genId =
+          task.generationId ||
+          this.getHookGenerationId(task.sessionId, task.promptIndex ?? 0);
+        if (genId) {
+          const resp = this.promptrailDb.getHookResponseForGeneration(
+            task.sessionId,
+            genId
+          );
+          if (resp) return resp;
+        }
+      }
+      // Shadow DB fallback: assistant bubbles
+      if (task.sessionId) {
+        const shortId = task.id.split("-").slice(1, -1).join("-");
+        const fullId = this.promptrailDb.findComposerIdByPrefix(shortId);
+        if (fullId) {
+          const bubbles = this.promptrailDb.getAssistantBubbles(fullId);
+          const userIdx = task.promptIndex ?? parseInt(task.id.split("-").pop()!, 10);
+          const forPrompt = bubbles.filter((b) => b.userIndex === userIdx);
+          if (forPrompt.length > 0) {
+            return forPrompt.map((b) => b.text).filter(Boolean).join("\n");
+          }
+        }
+      }
+      return undefined;
+    }
+
+    if (task.source === "claude") {
+      const promptIndex = task.promptIndex ?? parseInt(task.id.split("-").pop()!, 10);
+      const sessionId = task.sessionId || task.id.split("-").slice(1, -1).join("-");
+      return this.getClaudeResponse(sessionId, promptIndex);
+    }
+
+    return undefined;
+  }
+
   // ── Claude Code ──────────────────────────────────────────
 
   private getClaudeProjectDir(): string | undefined {
@@ -299,7 +343,7 @@ export class SessionReader {
 
         cur = {
           id: `cc-${sessionId.slice(0, 8)}-${taskIdx++}`,
-          prompt: promptText.slice(0, 500),
+          prompt: promptText.slice(0, 2000),
           createdAt: obj.timestamp
             ? new Date(obj.timestamp).getTime()
             : Date.now() - (lines.length - taskIdx) * 30000,
@@ -523,7 +567,7 @@ export class SessionReader {
       const b = bubbleData[i];
       tasks.push({
         id: `cur-${composerId.slice(0, 8)}-${i}`,
-        prompt: (b.text || "(empty)").slice(0, 500),
+        prompt: (b.text || "(empty)").slice(0, 2000),
         createdAt: b.createdAt || 0,
         status: i < bubbleData.length - 1 ? "completed" : "active",
         filesChanged: [...b.files],
@@ -617,7 +661,7 @@ export class SessionReader {
 
       tasks.push({
         id: `cur-${conversationId.slice(0, 8)}-${i}`,
-        prompt: (p.promptText || "(empty)").slice(0, 500),
+        prompt: (p.promptText || "(empty)").slice(0, 2000),
         createdAt: p.timestamp,
         status: i < dedupedPrompts.length - 1 ? "completed" : "active",
         filesChanged,
@@ -685,7 +729,7 @@ export class SessionReader {
 
       cur = {
         id: `cur-${composerId.slice(0, 8)}-${taskIdx++}`,
-        prompt: prompts[i].slice(0, 500),
+        prompt: prompts[i].slice(0, 2000),
         createdAt: realTimestamps[i],
         status: "active",
         filesChanged: [],
@@ -843,7 +887,7 @@ export class SessionReader {
 
         tasks.push({
           id: `vsc-${session.sessionId.slice(0, 8)}-${i}`,
-          prompt: req.messageText.slice(0, 500),
+          prompt: req.messageText.slice(0, 2000),
           createdAt: req.timestamp || session.creationDate,
           status: "completed",
           filesChanged: [...filesChanged],
