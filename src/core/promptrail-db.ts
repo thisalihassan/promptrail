@@ -148,7 +148,7 @@ const SCHEMA = `
 export interface SearchResult {
   composerId: string;
   userIndex: number;
-  type: "prompt" | "response";
+  type: "prompt" | "response" | "file";
   snippet: string;
   promptText: string;
   model: string;
@@ -449,18 +449,21 @@ export class PromptRailDB {
     try {
       this.db.exec("DELETE FROM search_index");
 
+      const insertStmt = this.db.prepare(
+        "INSERT INTO search_index (text, composerId, userIndex, type) VALUES (?, ?, ?, ?)"
+      );
+
+      // Shadow DB user prompts
       const prompts = this.db
         .prepare(
           "SELECT composerId, userIndex, text FROM user_bubbles WHERE text IS NOT NULL AND text != ''"
         )
         .all();
-      const insertStmt = this.db.prepare(
-        "INSERT INTO search_index (text, composerId, userIndex, type) VALUES (?, ?, ?, ?)"
-      );
       for (const p of prompts) {
         insertStmt.run(p.text, p.composerId, p.userIndex, "prompt");
       }
 
+      // Shadow DB assistant responses (grouped by prompt)
       const sessions = this.db
         .prepare("SELECT DISTINCT composerId FROM assistant_bubbles")
         .all();
@@ -482,6 +485,87 @@ export class PromptRailDB {
         }
       }
 
+      // Hook prompts (skip if already in user_bubbles)
+      const indexedPromptKeys = new Set(
+        prompts.map((p: any) => `${p.composerId}:${p.userIndex}`)
+      );
+      const hookConvIds = this.db
+        .prepare("SELECT DISTINCT conversationId FROM hook_prompts")
+        .all();
+      for (const c of hookConvIds) {
+        const hps = this.db
+          .prepare(
+            `SELECT generationId, promptText, model, timestamp
+             FROM hook_prompts WHERE conversationId = ?
+             ORDER BY timestamp`
+          )
+          .all(c.conversationId);
+        for (let i = 0; i < hps.length; i++) {
+          const key = `${c.conversationId}:${i}`;
+          if (indexedPromptKeys.has(key)) continue;
+          if (hps[i].promptText) {
+            insertStmt.run(hps[i].promptText, c.conversationId, i, "prompt");
+          }
+        }
+      }
+
+      // Hook responses (skip if already covered by assistant_bubbles)
+      const indexedResponseKeys = new Set<string>();
+      for (const s of sessions) {
+        const bubbles = this.db
+          .prepare(
+            "SELECT DISTINCT userIndex FROM assistant_bubbles WHERE composerId = ?"
+          )
+          .all(s.composerId);
+        for (const b of bubbles) {
+          indexedResponseKeys.add(`${s.composerId}:${b.userIndex}`);
+        }
+      }
+      for (const c of hookConvIds) {
+        const hrs = this.db
+          .prepare(
+            `SELECT generationId, responseText FROM hook_responses
+             WHERE conversationId = ?
+             ORDER BY timestamp`
+          )
+          .all(c.conversationId);
+        const byGen = new Map<string, string[]>();
+        for (const r of hrs) {
+          if (!byGen.has(r.generationId)) byGen.set(r.generationId, []);
+          byGen.get(r.generationId)!.push(r.responseText);
+        }
+        // Map generationId back to prompt index
+        const hps = this.db
+          .prepare(
+            `SELECT generationId FROM hook_prompts
+             WHERE conversationId = ? ORDER BY timestamp`
+          )
+          .all(c.conversationId);
+        const genToIdx = new Map<string, number>();
+        for (let i = 0; i < hps.length; i++) {
+          genToIdx.set(hps[i].generationId, i);
+        }
+        for (const [genId, texts] of byGen) {
+          const idx = genToIdx.get(genId) ?? 0;
+          const key = `${c.conversationId}:${idx}`;
+          if (indexedResponseKeys.has(key)) continue;
+          insertStmt.run(texts.join("\n"), c.conversationId, idx, "response");
+        }
+      }
+
+      // File paths from prompt_files (concatenated per prompt)
+      const pfRows = this.db
+        .prepare(
+          `SELECT composerId, userIndex, GROUP_CONCAT(filePath, ' ') as files
+           FROM prompt_files GROUP BY composerId, userIndex`
+        )
+        .all();
+      for (const pf of pfRows) {
+        if (pf.files) {
+          insertStmt.run(pf.files, pf.composerId, pf.userIndex, "file");
+        }
+      }
+
       const cnt = this.db
         .prepare("SELECT COUNT(*) as cnt FROM search_index")
         .get();
@@ -495,7 +579,10 @@ export class PromptRailDB {
       .prepare(
         `SELECT
            (SELECT COUNT(*) FROM user_bubbles WHERE text IS NOT NULL AND text != '') +
-           (SELECT COUNT(DISTINCT composerId || '-' || userIndex) FROM assistant_bubbles WHERE text IS NOT NULL AND text != '')
+           (SELECT COUNT(DISTINCT composerId || '-' || userIndex) FROM assistant_bubbles WHERE text IS NOT NULL AND text != '') +
+           (SELECT COUNT(*) FROM hook_prompts WHERE promptText IS NOT NULL AND promptText != '') +
+           (SELECT COUNT(DISTINCT conversationId || '-' || generationId) FROM hook_responses WHERE responseText IS NOT NULL AND responseText != '') +
+           (SELECT COUNT(DISTINCT composerId || '-' || userIndex) FROM prompt_files)
          as total`
       )
       .get();
@@ -524,15 +611,20 @@ export class PromptRailDB {
         SELECT
           si.text, si.composerId, si.userIndex, si.type, si.rank,
           snippet(search_index, 0, '>>>', '<<<', '...', 40) as snippet,
-          s.model, s.createdAt
+          COALESCE(s.model, hp.model) as model,
+          COALESCE(s.createdAt, hp.timestamp) as createdAt
         FROM search_index si
-        JOIN sessions s ON si.composerId = s.composerId
+        LEFT JOIN sessions s ON si.composerId = s.composerId
+        LEFT JOIN (
+          SELECT conversationId, MIN(model) as model, MIN(timestamp) as timestamp
+          FROM hook_prompts GROUP BY conversationId
+        ) hp ON si.composerId = hp.conversationId
         WHERE search_index MATCH ?
       `;
       const params: any[] = [ftsQuery];
 
       if (filters?.model) {
-        sql += " AND s.model LIKE '%' || ? || '%'";
+        sql += " AND COALESCE(s.model, hp.model) LIKE '%' || ? || '%'";
         params.push(filters.model);
       }
 
@@ -545,17 +637,29 @@ export class PromptRailDB {
         if (r.type === "prompt") {
           promptText = r.text;
         } else {
+          // Try user_bubbles first, fall back to hook_prompts
           const ub = this.db
             .prepare(
               "SELECT text FROM user_bubbles WHERE composerId = ? AND userIndex = ?"
             )
             .get(r.composerId, r.userIndex);
-          promptText = ub?.text || "";
+          if (ub?.text) {
+            promptText = ub.text;
+          } else {
+            const hps = this.db
+              .prepare(
+                "SELECT promptText FROM hook_prompts WHERE conversationId = ? ORDER BY timestamp"
+              )
+              .all(r.composerId);
+            if (r.userIndex < hps.length) {
+              promptText = hps[r.userIndex].promptText;
+            }
+          }
         }
         return {
           composerId: r.composerId,
           userIndex: r.userIndex,
-          type: r.type as "prompt" | "response",
+          type: r.type as "prompt" | "response" | "file",
           snippet: r.snippet || r.text?.slice(0, 120) || "",
           promptText,
           model: r.model || "",

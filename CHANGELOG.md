@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-03-15
+
+### Fixed
+- **Filtered timeline indices broke `diff`/`rollback` (BUG 24)** — `promptrail timeline -s cursor` showed filter-relative `#N` indices, so `diff N` resolved to the wrong prompt. Indices are now always global regardless of `--source`/`--model` filters.
+- **`promptrail response` failed for hook-sourced Cursor tasks (BUG 23)** — CLI `cmdResponse` called `findComposerIdByPrefix` before trying hook data, returning "No response data" for hook-only sessions. Now resolves via `sessionId` first.
+
+### Added
+- **Full-text search indexes hook data** — hook prompts, hook responses, and per-prompt file paths are now included in the FTS index, so `promptrail search` finds matches across all data sources
+- **Response text search** — `promptrail search` now matches against AI response content (not just prompts), with lazy fetching to avoid performance overhead
+- **Longer prompt text** — prompt display limit raised from 500 to 2000 characters for better search accuracy and display fidelity
+
 ## [0.6.6] - 2026-03-15
 
 ### Removed
@@ -179,7 +190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `.promptrail/` excluded from git tracking via `.git/info/exclude`
 
-[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/thisalihassan/promptrail/compare/v0.6.9...HEAD
+[0.6.9]: https://github.com/thisalihassan/promptrail/compare/v0.6.6...v0.6.9
 [0.6.6]: https://github.com/thisalihassan/promptrail/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/thisalihassan/promptrail/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/thisalihassan/promptrail/compare/v0.6.3...v0.6.4
